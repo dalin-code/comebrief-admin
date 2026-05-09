@@ -66,19 +66,3 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     </div>
   );
 }
-// 导出 metadata 对象
-export const metadata = {
-  robots: {
-    index: false,      // 不允许索引
-    follow: false,     // 不允许爬虫跟随页面上的链接
-    nocache: true,     // 不允许缓存
-  },
-}
-
-export default function AdminLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <section>
-      {children}
-    </section>
-  )
-}
