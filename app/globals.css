@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 暴力重置所有背景为白色 */
+:root {
+  --background: #ffffff;
+  --foreground: #111827;
+}
+
+body {
+  background-color: white !important;
+  color: #111827 !important;
+}
+
+/* 移除所有深色模式的自动适配 */
+@media (prefers-color-scheme: dark) {
+  body {
+    background-color: white !important;
+    color: #111827 !important;
+  }
+}
