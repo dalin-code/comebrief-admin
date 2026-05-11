@@ -2,17 +2,11 @@
 
 import { useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { createBrowserClient } from '@supabase/ssr'
+import { supabase } from '@/lib/supabase'
 
 function AdminLoginContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  
-  // 初始化适配 SSR 的浏览器客户端
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
