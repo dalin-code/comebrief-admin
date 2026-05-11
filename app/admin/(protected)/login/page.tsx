@@ -2,11 +2,18 @@
 
 import { useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { createBrowserClient } from '@supabase/ssr'
 
 function AdminLoginContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  
+  // 初始化适配 SSR 的浏览器客户端
+  const supabase = createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  )
+
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -14,6 +21,7 @@ function AdminLoginContent() {
 
   const canSubmit = email.trim() && password.trim() && !loading
 
+  // 更加友好的错误提示
   const formatAuthError = (e: any) => {
     const message = String(e?.message || e?.msg || '')
     if (message.toLowerCase().includes('invalid login credentials')) return '账号或密码错误'
@@ -23,62 +31,89 @@ function AdminLoginContent() {
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!email.trim() || !password.trim()) return
+    if (!canSubmit) return
+
     setLoading(true)
-    setMsg({ type: 'info', text: '登录中…' })
-    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
+    setMsg({ type: 'info', text: '正在验证身份...' })
+
+    const { error } = await supabase.auth.signInWithPassword({ 
+      email: email.trim(), 
+      password 
+    })
+
     if (error) {
       setMsg({ type: 'error', text: formatAuthError(error) })
       setLoading(false)
       return
     }
-    setMsg({ type: 'success', text: '登录成功，正在跳转…' })
+
+    setMsg({ type: 'success', text: '验证通过，进入总控室...' })
+
+    // 核心：刷新页面状态，让 Middleware 看到新的 Cookie
+    router.refresh()
+    
+    // 跳转到来源页或仪表盘
     const redirectUrl = searchParams.get('redirect')
     router.push(redirectUrl || '/admin/dashboard')
   }
 
   const tone =
     msg?.type === 'success'
-      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600'
       : msg?.type === 'error'
-        ? 'border-rose-500/30 bg-rose-500/10 text-rose-200'
-        : 'border-sky-500/30 bg-sky-500/10 text-sky-200'
+        ? 'border-rose-500/30 bg-rose-500/10 text-rose-600'
+        : 'border-sky-500/30 bg-sky-500/10 text-sky-600'
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-6">
+    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-6 font-sans">
       <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
-        <div className="mb-6">
-          <div className="text-sm text-slate-500">管理员后台</div>
-          <h1 className="mt-1 text-2xl font-semibold text-slate-900">登录</h1>
+        <div className="mb-8">
+          <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Admin Control Panel</div>
+          <h1 className="mt-2 text-3xl font-semibold text-slate-900">登录</h1>
         </div>
-        {msg ? <div className={`mb-4 rounded-xl border px-4 py-3 text-sm ${tone}`}>{msg.text}</div> : null}
-        <form onSubmit={onSubmit} className="space-y-4">
-          <div>
-            <label className="mb-2 block text-sm text-slate-700">邮箱</label>
+
+        {msg && (
+          <div className={`mb-6 rounded-xl border px-4 py-3 text-sm transition-all ${tone}`}>
+            {msg.text}
+          </div>
+        )}
+
+        <form onSubmit={onSubmit} className="space-y-5">
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-slate-700">管理邮箱</label>
             <input
               type="email"
-              className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-slate-900 outline-none placeholder:text-slate-400 focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20"
-              placeholder="you@example.com"
+              className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 placeholder:text-slate-300"
+              placeholder="admin@comebrief.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
           </div>
-          <div>
-            <label className="mb-2 block text-sm text-slate-700">密码</label>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-slate-700">安全密码</label>
             <input
               type="password"
-              className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-slate-900 outline-none placeholder:text-slate-400 focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20"
+              className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 placeholder:text-slate-300"
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
           </div>
+          
           <button
             type="submit"
             disabled={!canSubmit}
-            className="inline-flex h-12 w-full items-center justify-center rounded-xl bg-emerald-500 px-6 font-medium text-emerald-950 shadow-sm transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+            className="relative flex h-12 w-full items-center justify-center rounded-xl bg-slate-900 px-6 font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
           >
-            登录
+            {loading ? (
+              <span className="flex items-center gap-2">
+                <svg className="h-4 w-4 animate-spin text-white" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                正在验证
+              </span>
+            ) : '进入后台'}
           </button>
         </form>
       </div>
@@ -88,7 +123,11 @@ function AdminLoginContent() {
 
 export default function AdminLoginPage() {
   return (
-    <Suspense fallback={<div className="flex min-h-screen items-center justify-center bg-slate-50">加载中...</div>}>
+    <Suspense fallback={
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-400 text-sm animate-pulse">
+        初始化安全环境...
+      </div>
+    }>
       <AdminLoginContent />
     </Suspense>
   )
