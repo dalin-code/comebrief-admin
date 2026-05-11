@@ -1,105 +1,51 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import Link from "next/link";
-import { Zap, BrainCircuit, ShieldCheck, Plus, Eye, Edit3, Trash2 } from "lucide-react";
-import { createBrowserClient } from "@supabase/ssr";
+import React from "react";
+import { Zap, BrainCircuit, ShieldCheck, Target, ArrowUpRight, Megaphone } from "lucide-react";
 
-const MODULES = {
-  trends: { title: "Trends 资讯", table: "articles", category: "trends", icon: <Zap size={16} /> },
-  quizzes: { title: "Quizzes 测试", table: "quizzes", category: null, icon: <BrainCircuit size={16} /> },
-  stories: { title: "Stories 故事", table: "stories", category: null, icon: <ShieldCheck size={16} /> },
-};
-
-export default function AdminTablePage() {
-  const [tab, setTab] = useState<keyof typeof MODULES>("trends");
-  const [rows, setRows] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  // 🛡️ 关键：使用 Browser Client 确保 Cookie 同步
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
-
-  const loadData = async () => {
-    setLoading(true);
-    const active = MODULES[tab];
-    let query = supabase.from(active.table).select("*").order("created_at", { ascending: false });
-    if (active.category) query = query.eq("category", active.category);
-    const { data } = await query.limit(100);
-    setRows(data || []);
-    setLoading(false);
-  };
-
-  useEffect(() => { loadData(); }, [tab]);
-
-  const handleDelete = async (id: string) => {
-    if (!confirm("确认删除节点？此操作不可逆。")) return;
-    const { error } = await supabase.from(MODULES[tab].table).delete().eq("id", id);
-    if (!error) loadData();
-  };
+export default function DashboardPage() {
+  const stats = [
+    { title: "Trends Pulse", value: "128", growth: "+12%", icon: <Zap className="text-cyan-500" />, color: "bg-cyan-50" },
+    { title: "Active Quiz", value: "42", growth: "+5%", icon: <BrainCircuit className="text-purple-500" />, color: "bg-purple-50" },
+    { title: "Ad Impressions", value: "12.5k", growth: "+24%", icon: <Megaphone className="text-amber-500" />, color: "bg-amber-50" },
+    { title: "2026 Target", value: "¥52.4k", growth: "10.5%", icon: <Target className="text-rose-500" />, color: "bg-rose-50" },
+  ];
 
   return (
-    <div className="flex min-h-screen bg-white font-sans text-slate-900">
-      {/* 侧边栏 */}
-      <aside className="w-64 border-r border-slate-100 bg-slate-50/50 flex flex-col h-screen sticky top-0">
-        <div className="p-8 border-b border-slate-100 bg-white font-black italic tracking-tighter text-2xl text-cyan-600">
-          AURA ADMIN
-        </div>
-        <nav className="p-6 space-y-3">
-          {(Object.keys(MODULES) as Array<keyof typeof MODULES>).map((m) => (
-            <button
-              key={m}
-              onClick={() => setTab(m)}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all ${
-                tab === m ? "bg-slate-900 text-white shadow-xl scale-105" : "text-slate-400 hover:bg-slate-200"
-              }`}
-            >
-              {MODULES[m].icon} {MODULES[m].title}
-            </button>
-          ))}
-        </nav>
-      </aside>
+    <div className="p-10 space-y-10 animate-in fade-in duration-700">
+      <header>
+        <h1 className="text-3xl font-black italic tracking-tighter text-slate-900 uppercase">
+          Command Center <span className="text-cyan-500">.</span>
+        </h1>
+        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Operational Intelligence Overview</p>
+      </header>
 
-      {/* 主内容 */}
-      <main className="flex-1">
-        <header className="h-20 border-b border-slate-100 px-10 flex items-center justify-between sticky top-0 bg-white/80 backdrop-blur-xl z-10">
-          <h2 className="font-black italic text-xl tracking-tighter uppercase">{MODULES[tab].title}</h2>
-          <Link href={`/admin/${tab}/edit`} className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 px-6 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 shadow-lg shadow-cyan-500/20 transition-all active:scale-95">
-            <Plus size={14} /> Sync New Node
-          </Link>
-        </header>
-
-        <div className="p-10">
-          <div className="border border-slate-100 rounded-[32px] overflow-hidden bg-white shadow-sm">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="bg-slate-50/50 border-b border-slate-100 text-[9px] font-black uppercase tracking-[0.2em] text-slate-400">
-                  <th className="px-8 py-5">Intel Title</th>
-                  <th className="px-8 py-5">Slug Path</th>
-                  <th className="px-8 py-5 text-center">Protocol</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {rows.map((item) => (
-                  <tr key={item.id} className="hover:bg-slate-50/30 transition-colors group">
-                    <td className="px-8 py-6 font-bold text-sm group-hover:text-cyan-600">{item.title}</td>
-                    <td className="px-8 py-6 text-[10px] font-mono text-slate-300">/{item.slug}</td>
-                    <td className="px-8 py-6">
-                      <div className="flex justify-center gap-6 text-slate-300">
-                        <a href={`/trends/${item.slug}`} target="_blank" className="hover:text-cyan-500"><Eye size={18} /></a>
-                        <Link href={`/admin/${tab}/edit?id=${item.id}`} className="hover:text-emerald-500"><Edit3 size={18} /></Link>
-                        <button onClick={() => handleDelete(item.id)} className="hover:text-rose-500"><Trash2 size={18} /></button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {/* 数据卡片网格 */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {stats.map((stat, i) => (
+          <div key={i} className="p-8 rounded-[40px] bg-white border border-slate-100 shadow-sm hover:shadow-xl transition-all group">
+            <div className="flex justify-between items-start mb-6">
+              <div className={`p-4 rounded-2xl ${stat.color} transition-transform group-hover:rotate-12`}>
+                {stat.icon}
+              </div>
+              <span className="text-[9px] font-black text-emerald-500 bg-emerald-50 px-2 py-1 rounded-full flex items-center">
+                {stat.growth} <ArrowUpRight size={10} className="ml-0.5" />
+              </span>
+            </div>
+            <div className="space-y-1">
+              <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">{stat.title}</p>
+              <h3 className="text-3xl font-black text-slate-900 tracking-tighter">{stat.value}</h3>
+            </div>
           </div>
-        </div>
-      </main>
+        ))}
+      </div>
+
+      {/* 营收监控大板 */}
+      <div className="p-10 rounded-[48px] bg-slate-950 border border-white/5 relative overflow-hidden min-h-[350px] flex flex-col justify-end text-white">
+        <div className="absolute top-0 right-0 w-64 h-64 bg-cyan-500/10 blur-[100px] rounded-full" />
+        <h4 className="text-2xl font-black italic tracking-tighter mb-2">Revenue Node Analysis</h4>
+        <p className="text-slate-500 text-sm max-w-sm">当前 2026 营收目标已同步，ADS 模块已就绪，正在监控全站变现效率。</p>
+      </div>
     </div>
   );
 }
