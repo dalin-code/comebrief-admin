@@ -185,7 +185,6 @@ function EditorContentComponent() {
         category: selectedCats[0] || 'Uncategorized',
         status: 'published',
         content_html: editor?.getHTML() || '',
-        labels: selectedLabels,
       };
       
       if (articleId) {
