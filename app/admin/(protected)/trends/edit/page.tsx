@@ -176,7 +176,7 @@ function EditorContentComponent() {
         return;
       }
 
-      const payload = {
+      const payload: any = {
         title,
         excerpt,
         cover_url: coverUrl,
@@ -184,14 +184,15 @@ function EditorContentComponent() {
         author_avatar: authorAvatar,
         category: selectedCats[0] || 'Uncategorized',
         status: 'published',
-        content_html: editor?.getHTML() || ''
-        // 注意：移除了 user_id 因为表中目前没有这个字段，避免 PGRST204 报错
+        content_html: editor?.getHTML() || '',
+        labels: selectedLabels,
       };
       
       if (articleId) {
         const { error } = await supabase.from('articles').update(payload).eq('id', articleId);
         if (error) throw error;
         showToast('文章更新成功！', 'success');
+        setTimeout(() => router.push('/admin/trends'), 1200);
       } else {
         const slug = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Math.random().toString(36).substring(2, 7)}`;
         const { error } = await supabase.from('articles').insert({ 
@@ -201,7 +202,7 @@ function EditorContentComponent() {
         });
         if (error) throw error;
         showToast('文章发布成功！', 'success');
-        setTimeout(() => router.push('/admin/trends'), 1500);
+        setTimeout(() => router.push('/admin/trends'), 1200);
       }
     } catch (e: any) {
       showToast(`保存失败: ${e.message}`, 'error');
@@ -376,6 +377,8 @@ function EditorContentComponent() {
             setAuthorName(data.author_name || INITIAL_EDITORS[0].name);
             setAuthorAvatar(data.author_avatar || INITIAL_EDITORS[0].avatar);
             if (data.category) setSelectedCats([data.category]);
+            if (Array.isArray(data.labels)) setSelectedLabels(data.labels);
+            else if (Array.isArray(data.tags)) setSelectedLabels(data.tags);
             if (data.content_html) {
               editor.commands.setContent(data.content_html);
             }
