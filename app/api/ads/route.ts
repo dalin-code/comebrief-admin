@@ -1,4 +1,4 @@
-// app/api/ads/route.ts (3001 端口后端项目)
+// app/api/ads/route.ts (3001 后端总控项目)
 import { NextResponse, NextRequest } from 'next/server'
 import { getSupabaseAdminClient } from '@/lib/supabaseAdmin'
 
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     
-    // 严格对照你数据库里的字段名进行抓取
+    // 严格对照底层 Supabase 字段名进行解构抓取
     const { 
       id, title, position, active,
       image_url, dark_image_url, mobile_image_url, 
@@ -82,19 +82,35 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// 🚀 3. 浏览器跨域探测通道
+// ==========================================
+// 🚀 3. 浏览器跨域探测通道 (OPTIONS)
+// ==========================================
 export async function OPTIONS(req: NextRequest) {
   return addCorsHeaders(new NextResponse(null, { status: 204 }), req)
 }
 
-// 🚀 4. 动态双向跨域清道夫
+// ==========================================
+// 🚀 4. 动态多向跨域安全白名单过滤器
+// ==========================================
 function addCorsHeaders(response: NextResponse, req: NextRequest) {
   const origin = req.headers.get('origin') || ''
-  if (origin === 'http://localhost:3000' || origin === 'http://localhost:3001') {
+  
+  // ⚡ 完美兼容线上生产环境与本地双端联调
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'https://comebrief.com',
+    'https://www.comebrief.com',
+    'https://admin.comebrief.com'
+  ];
+  
+  if (allowedOrigins.includes(origin)) {
     response.headers.set('Access-Control-Allow-Origin', origin)
   } else {
-    response.headers.set('Access-Control-Allow-Origin', 'http://localhost:3000')
+    // 默认线上生产环境安全放行
+    response.headers.set('Access-Control-Allow-Origin', 'https://comebrief.com')
   }
+  
   response.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
   response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization')
   return response
