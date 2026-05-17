@@ -6,17 +6,12 @@ import {
   Layers, Loader2, Image as ImageIcon
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from '@/lib/supabase';
 
 export default function StoryListPage() {
   const router = useRouter();
   const [stories, setStories] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
 
   const loadStories = async () => {
     setLoading(true);

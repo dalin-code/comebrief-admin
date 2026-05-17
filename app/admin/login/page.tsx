@@ -30,25 +30,22 @@ function AdminLoginContent() {
     setLoading(true)
     setMsg({ type: 'info', text: '正在验证身份...' })
 
-    const { error } = await supabase.auth.signInWithPassword({ 
+    const { data, error } = await supabase.auth.signInWithPassword({ 
       email: email.trim(), 
       password 
     })
 
-    if (error) {
-      setMsg({ type: 'error', text: formatAuthError(error) })
+    if (error || !data?.session) {
+      setMsg({ type: 'error', text: formatAuthError(error || { message: '登录失败，请稍后重试' }) })
       setLoading(false)
       return
     }
 
     setMsg({ type: 'success', text: '验证通过，进入总控室...' })
 
-    // 核心：刷新页面状态，让 Middleware 看到新的 Cookie
-    router.refresh()
-    
-    // 跳转到来源页或仪表盘
     const redirectUrl = searchParams.get('redirect')
-    router.push(redirectUrl || '/admin/dashboard')
+    await router.push(redirectUrl || '/admin/dashboard')
+    setLoading(false)
   }
 
   const tone =

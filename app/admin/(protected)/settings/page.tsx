@@ -1,11 +1,11 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { 
+import {
   Settings, Globe, Share2, 
   Code2, Save, CheckCircle2, Loader2, Info
 } from "lucide-react";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from '@/lib/supabase';
 
 const CONFIG_GROUPS = [
   {
@@ -40,11 +40,6 @@ export default function SystemSettings() {
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
-
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
 
   // 加载数据
   const loadConfigs = async () => {

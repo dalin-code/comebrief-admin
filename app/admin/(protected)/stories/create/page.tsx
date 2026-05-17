@@ -7,12 +7,7 @@ import {
   Type, LayoutPanelTop, Eye, Unlock, Loader2, AlertCircle
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+import { supabase } from '@/lib/supabase';
 
 function PublisherStudioContent() {
   const router = useRouter();
