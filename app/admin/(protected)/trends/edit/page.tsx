@@ -5,9 +5,8 @@ import { useEffect, useState, useRef, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 // 🚀 完整导入所有图标，确保无一遗漏
 import { 
-  ArrowLeft, X, Loader2, Check, Upload, Image as ImageIcon, Dice5, Zap, Clock, 
-  TrendingUp, Flame, Star, Plus, Minus, Send, Sparkles, Globe, Heart, Coffee, 
-  BookOpen, Brain, Tent, Gamepad2, Home, BarChart3, Trash2, Layers
+  ArrowLeft, X, Loader2, Check, Upload, Image as ImageIcon, Dice5, Clock, 
+  TrendingUp, Flame, Star, Plus, Minus, Send, Save, Calendar, Zap
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useEditor, EditorContent } from '@tiptap/react'
@@ -55,11 +54,16 @@ function EditorContentComponent() {
       titleRef.current.style.height = titleRef.current.scrollHeight + 'px';
     }
   }, [title]);
+  
   const [excerpt, setExcerpt] = useState('');
   const [coverUrl, setCoverUrl] = useState('');
   const [authorName, setAuthorName] = useState(INITIAL_EDITORS[0].name);
   const [authorAvatar, setAuthorAvatar] = useState(INITIAL_EDITORS[0].avatar);
   
+  // 🚀 新增发布与定时状态管理
+  const [postStatus, setPostStatus] = useState<'draft' | 'published' | 'scheduled'>('published');
+  const [scheduledAt, setScheduledAt] = useState('');
+
   // 分类与标签管理 (支持多选与增删)
   const [availableCats, setAvailableCats] = useState(INITIAL_CATS);
   const [selectedCats, setSelectedCats] = useState<string[]>(['AI']);
@@ -125,7 +129,7 @@ function EditorContentComponent() {
                 }
               },
               'image/webp',
-              0.85 // 设置质量为 85%
+              0.85
             );
           };
           img.onerror = () => reject(new Error('图片加载失败'));
@@ -152,30 +156,41 @@ function EditorContentComponent() {
     if (data) setAssets(data.filter(f => f.name !== '.emptyFolderPlaceholder'));
   }, []);
 
-  // 4. 保存/发布逻辑
+  // 4. 重构后的核心保存/定时发布逻辑
   const handleSave = async () => {
     if (!title.trim()) {
       showToast('请输入文章标题', 'error');
       return;
     }
+
+    // 🚀 安全验证：如果是定时发布，必须选择未来的时间
+    if (postStatus === 'scheduled') {
+      if (!scheduledAt) {
+        showToast('请选择定时发送的具体时间', 'error');
+        return;
+      }
+      if (new Date(scheduledAt).getTime() <= Date.now()) {
+        showToast('定时发送时间必须晚于当前时间', 'error');
+        return;
+      }
+    }
+
     setSaving(true);
     try {
-      // 1. 获取最新会话，而不是 getUser (getSession 更快)
       const { data: { session } } = await supabase.auth.getSession();
       
       if (!session) {
         showToast('登录失效，正在为你保存草稿并跳转登录...', 'error');
-        // 🚀 商人技巧：将当前编辑的内容存入 localStorage，登录回来后还能恢复
         localStorage.setItem('cb_draft_title', title);
         localStorage.setItem('cb_draft_content', editor?.getHTML() || '');
         
-        // 延迟跳转，给用户反应时间
         setTimeout(() => {
           window.location.href = `/admin/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`;
         }, 2000);
         return;
       }
 
+      // 组装最新发布状态控制
       const payload: any = {
         title,
         excerpt,
@@ -183,34 +198,36 @@ function EditorContentComponent() {
         author_name: authorName,
         author_avatar: authorAvatar,
         category: selectedCats[0] || 'Uncategorized',
-        status: 'published',
+        labels: selectedLabels,
+        status: postStatus, // 'draft' | 'published' | 'scheduled'
         content_html: editor?.getHTML() || '',
+        scheduled_at: postStatus === 'scheduled' ? new Date(scheduledAt).toISOString() : null,
       };
       
       if (articleId) {
         const { error } = await supabase.from('articles').update(payload).eq('id', articleId);
         if (error) throw error;
-        showToast('文章更新成功！', 'success');
+        showToast(postStatus === 'draft' ? '草稿更新成功！' : postStatus === 'scheduled' ? '定时排期更新成功！' : '文章发布成功！', 'success');
         setTimeout(() => router.push('/admin/trends'), 1200);
       } else {
         const slug = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Math.random().toString(36).substring(2, 7)}`;
         const { error } = await supabase.from('articles').insert({ 
           ...payload, 
           slug, 
-          published_at: new Date().toISOString() 
+          published_at: postStatus === 'published' ? new Date().toISOString() : null 
         });
         if (error) throw error;
-        showToast('文章发布成功！', 'success');
+        showToast(postStatus === 'draft' ? '草稿已成功保存！' : postStatus === 'scheduled' ? '定时发送排期成功！' : '文章已正式发布上线！', 'success');
         setTimeout(() => router.push('/admin/trends'), 1200);
       }
     } catch (e: any) {
-      showToast(`保存失败: ${e.message}`, 'error');
+      showToast(`操作失败: ${e.message}`, 'error');
     } finally {
       setSaving(false);
     }
   };
 
-  // --- 🚀 修复点：Tiptap 显式设置 immediatelyRender 为 false ---
+  // --- Tiptap 核心编辑器初始化 ---
   const editor = useEditor({
     extensions: [
       StarterKit,
@@ -233,7 +250,6 @@ function EditorContentComponent() {
             const file = item.getAsFile();
             if (!file) continue;
             
-            // 转换为 WebP 并上传
             const uploadImage = async () => {
               try {
                 setUploading(true);
@@ -269,7 +285,6 @@ function EditorContentComponent() {
                 const { error } = await supabase.storage.from('images').upload(filePath, webpFile);
                 
                 if (error) throw error;
-                
                 const { data } = supabase.storage.from('images').getPublicUrl(filePath);
                 
                 if (data.publicUrl) {
@@ -285,7 +300,7 @@ function EditorContentComponent() {
               }
             };
             uploadImage();
-            return true; // 阻止默认粘贴行为
+            return true;
           }
         }
         return false;
@@ -296,7 +311,6 @@ function EditorContentComponent() {
           if (file.type.indexOf('image') === 0) {
             event.preventDefault();
             
-            // 转换为 WebP 并上传
             const uploadImage = async () => {
               try {
                 setUploading(true);
@@ -332,7 +346,6 @@ function EditorContentComponent() {
                 const { error } = await supabase.storage.from('images').upload(filePath, webpFile);
                 
                 if (error) throw error;
-                
                 const { data } = supabase.storage.from('images').getPublicUrl(filePath);
                 
                 if (data.publicUrl) {
@@ -349,7 +362,7 @@ function EditorContentComponent() {
               }
             };
             uploadImage();
-            return true; // 阻止默认拖拽行为
+            return true;
           }
         }
         return false;
@@ -357,12 +370,11 @@ function EditorContentComponent() {
     }
   });
 
-  // 强制挂载保护
+  // 强制挂载与数据加载保护
   useEffect(() => {
     setIsMounted(true);
     loadAssets();
     
-    // 如果是编辑模式，加载已有数据
     if (articleId && editor && !hasLoadedRef.current) {
       hasLoadedRef.current = true;
       const loadArticle = async () => {
@@ -375,9 +387,16 @@ function EditorContentComponent() {
             setCoverUrl(data.cover_url || '');
             setAuthorName(data.author_name || INITIAL_EDITORS[0].name);
             setAuthorAvatar(data.author_avatar || INITIAL_EDITORS[0].avatar);
+            if (data.status) setPostStatus(data.status);
+            if (data.scheduled_at) {
+              // 转换为本地 datetime-local 格式所需的字符串
+              const localDate = new Date(data.scheduled_at);
+              const offset = localDate.getTimezoneOffset() * 60000;
+              const localISOTime = new Date(localDate.getTime() - offset).toISOString().slice(0, 16);
+              setScheduledAt(localISOTime);
+            }
             if (data.category) setSelectedCats([data.category]);
-            if (Array.isArray(data.labels)) setSelectedLabels(data.labels);
-            else if (Array.isArray(data.tags)) setSelectedLabels(data.tags);
+            if (data.labels && Array.isArray(data.labels)) setSelectedLabels(data.labels);
             if (data.content_html) {
               editor.commands.setContent(data.content_html);
             }
@@ -392,10 +411,19 @@ function EditorContentComponent() {
 
   if (!isMounted) return null;
 
+  // 根据当前右侧选中的状态，动态决定顶部大按钮的文案与图标
+  const getSubmitButtonConfig = () => {
+    if (postStatus === 'draft') return { label: articleId ? '保存草稿修改' : '保存为草稿 (Draft)', icon: <Save size={14} /> };
+    if (postStatus === 'scheduled') return { label: articleId ? '更新定时发送' : '安排定时发送 (Schedule)', icon: <Calendar size={14} /> };
+    return { label: articleId ? '更新文章 (Update)' : '发布上线 (Deploy)', icon: <Send size={14} /> };
+  };
+
+  const btnConfig = getSubmitButtonConfig();
+
   return (
     <div className="min-h-screen bg-[#FBFBFC] text-slate-900 font-sans selection:bg-indigo-100">
       
-      {/* 🚀 顶部导航：后台中文管理 / 前台品牌展示 */}
+      {/* 🚀 顶部导航：AI 按钮已被干净利落地移除 */}
       <nav className="sticky top-0 z-[60] bg-white/90 backdrop-blur-3xl border-b border-slate-100 px-8 py-5 flex justify-between items-center">
         <div className="flex items-center gap-6">
           <Link href="/admin/trends" className="w-10 h-10 flex items-center justify-center rounded-2xl bg-white border border-slate-100 hover:shadow-xl transition-all"><ArrowLeft size={18} /></Link>
@@ -405,15 +433,12 @@ function EditorContentComponent() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-           <button className="px-6 py-3 bg-indigo-50 text-indigo-600 rounded-2xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 border border-indigo-100 hover:bg-indigo-600 hover:text-white transition-all shadow-sm">
-             <Sparkles size={14} /> AI 自动调研生成
-           </button>
            <button 
              onClick={handleSave}
              disabled={saving}
              className={`h-12 px-10 text-white rounded-2xl font-black text-[10px] uppercase shadow-2xl bg-slate-900 flex items-center gap-3 transition-all ${saving ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105'}`}>
-             {saving ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} 
-             {articleId ? '更新文章 (Update)' : '发布上线 (Deploy)'}
+             {saving ? <Loader2 size={14} className="animate-spin" /> : btnConfig.icon} 
+             {btnConfig.label}
            </button>
         </div>
       </nav>
@@ -435,7 +460,6 @@ function EditorContentComponent() {
               value={title} 
               onChange={e => {
                 setTitle(e.target.value);
-                // 自动调整高度
                 e.target.style.height = 'auto';
                 e.target.style.height = e.target.scrollHeight + 'px';
               }} 
@@ -444,7 +468,7 @@ function EditorContentComponent() {
               className="w-full text-4xl md:text-3xl font-black text-slate-900 bg-transparent border-none outline-none italic tracking-tighter placeholder:text-slate-100 resize-none overflow-hidden" 
               style={{ minHeight: '60px' }}
             />
-            {/* 🚀 摘要部分 (Excerpt) */}
+            {/* 摘要部分 (Excerpt) */}
             <div className="space-y-2">
               <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">文章摘要 (EXCERPT)</label>
               <textarea 
@@ -479,6 +503,39 @@ function EditorContentComponent() {
 
         {/* 右侧：配置看板 */}
         <aside className="lg:col-span-4 space-y-8">
+          
+          {/* 🚀 核心新增：发布策略中心 (状态机 + 定时发送) */}
+          <section className="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm transition-all hover:shadow-md">
+            <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-400 mb-6 italic flex items-center gap-2">发布策略 (Strategy) <Clock size={14}/></h3>
+            <div className="flex flex-col gap-5">
+              {/* 三档切换按钮 */}
+              <div className="grid grid-cols-3 gap-2 p-1.5 bg-slate-50 rounded-2xl border border-slate-100">
+                {(['draft', 'published', 'scheduled'] as const).map((status) => (
+                  <button
+                    key={status}
+                    type="button"
+                    onClick={() => setPostStatus(status)}
+                    className={`py-3 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all ${postStatus === status ? 'bg-slate-900 text-white shadow-md scale-102' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                    {status === 'draft' ? '草稿' : status === 'published' ? '立即发布' : '定时发送'}
+                  </button>
+                ))}
+              </div>
+
+              {/* 定时时间选择器：仅在选中 scheduled 时高亮优雅展开 */}
+              {postStatus === 'scheduled' && (
+                <div className="space-y-2 p-5 bg-indigo-50/40 rounded-3xl border border-indigo-50 animate-in slide-in-from-top-3 duration-200">
+                  <label className="text-[8px] font-black uppercase tracking-widest text-indigo-500 block ml-1">选择海外发射时间 (Local Time)</label>
+                  <input
+                    type="datetime-local"
+                    value={scheduledAt}
+                    onChange={(e) => setScheduledAt(e.target.value)}
+                    className="w-full px-4 py-3 bg-white border border-slate-100 text-xs font-bold rounded-xl text-slate-700 outline-none focus:border-indigo-500 transition-all shadow-inner"
+                  />
+                </div>
+              )}
+            </div>
+          </section>
           
           {/* 运营分类 (Labels) */}
           <section className="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm transition-all hover:shadow-md">
@@ -580,7 +637,6 @@ function EditorContentComponent() {
                      <h2 className="text-4xl font-black italic uppercase tracking-tighter">Media Vault</h2>
                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2">媒体资源库 2026</p>
                    </div>
-                   {/* 🚀 批量上传按钮 */}
                    <button 
                      onClick={() => fileInputRef.current?.click()}
                      className="px-8 py-4 bg-emerald-500 text-white rounded-[24px] text-[10px] font-black uppercase tracking-widest flex items-center gap-3 shadow-xl hover:bg-emerald-600 transition-all"
