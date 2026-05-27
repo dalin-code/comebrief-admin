@@ -107,7 +107,6 @@ function EditorContentComponent() {
     setUploading(true);
     try {
       const uploadPromises = Array.from(files).map(async (file) => {
-        // 图片转 WebP 处理
         const webpFile = await new Promise<File>((resolve, reject) => {
           const img = new Image();
           img.src = URL.createObjectURL(file);
@@ -117,7 +116,6 @@ function EditorContentComponent() {
             canvas.height = img.height;
             const ctx = canvas.getContext('2d');
             if (!ctx) return reject(new Error('Canvas context not available'));
-            
             ctx.drawImage(img, 0, 0);
             canvas.toBlob(
               (blob) => {
@@ -143,7 +141,7 @@ function EditorContentComponent() {
       });
       await Promise.all(uploadPromises);
       showToast(`成功同步 ${files.length} 张资源图片`, 'success');
-      loadAssets(); // 刷新媒体库
+      loadAssets(); 
     } catch (err: any) {
       showToast(`上传失败: ${err.message}`, 'error');
     } finally {
@@ -156,7 +154,7 @@ function EditorContentComponent() {
     if (data) setAssets(data.filter(f => f.name !== '.emptyFolderPlaceholder'));
   }, []);
 
-  // 4. 重构后的核心保存/定时发布逻辑
+  // 4. 重构后的核心保存/定时发布逻辑 —— 🚀 已完全闭合且加上路径限制防护锁
   const handleSave = async () => {
     if (!title.trim()) {
       showToast('请输入文章标题', 'error');
@@ -181,11 +179,16 @@ function EditorContentComponent() {
       
       if (!session) {
         showToast('登录失效，正在为你保存草稿并跳转登录...', 'error');
+        // @ts-ignore
         localStorage.setItem('cb_draft_title', title);
+        // @ts-ignore
         localStorage.setItem('cb_draft_content', editor?.getHTML() || '');
         
         setTimeout(() => {
-          window.location.href = `/admin/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+          // 🎯 核心隔离看门狗：只允许在管理端路径触发强转
+          if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
+            window.location.href = `/admin/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+          }
         }, 2000);
         return;
       }
@@ -199,7 +202,8 @@ function EditorContentComponent() {
         author_avatar: authorAvatar,
         category: selectedCats[0] || 'Uncategorized',
         labels: selectedLabels,
-        status: postStatus, // 'draft' | 'published' | 'scheduled'
+        status: postStatus, 
+        // @ts-ignore
         content_html: editor?.getHTML() || '',
         scheduled_at: postStatus === 'scheduled' ? new Date(scheduledAt).toISOString() : null,
       };
