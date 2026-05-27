@@ -29,7 +29,6 @@ const INITIAL_LABELS = [
   { id: 'new', name: 'Fresh', icon: <Zap size={12} />, color: 'text-emerald-500 bg-emerald-50' },
 ]
 
-const INITIAL_CATS = ['AI', 'Tech', 'Gaming', 'Travel', 'Home Decor', 'Learning'];
 
 function EditorContentComponent() {
   const router = useRouter(); 
@@ -64,8 +63,8 @@ function EditorContentComponent() {
   const [postStatus, setPostStatus] = useState<'draft' | 'published' | 'scheduled'>('published');
   const [scheduledAt, setScheduledAt] = useState('');
 
-  // 分类与标签管理 (支持多选与增删)
-  const [availableCats, setAvailableCats] = useState(INITIAL_CATS);
+  // 🔄【持久化核心改造】：初始化时直接去拉取 Supabase 里的分类，确保刷新永不丢失
+  const [availableCats, setAvailableCats] = useState<string[]>([]);
   const [selectedCats, setSelectedCats] = useState<string[]>(['AI']);
   const [availableLabels, setAvailableLabels] = useState(INITIAL_LABELS);
   const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
@@ -82,6 +81,30 @@ function EditorContentComponent() {
   const showToast = useCallback((msg: string, type: 'success' | 'error') => {
     setNotice({ msg, type });
     setTimeout(() => setNotice(null), 3500);
+  }, []);
+
+  // 🔄【动态打捞补丁】：组件一挂载，立马去捞 Supabase 的 categories 表
+  useEffect(() => {
+    const fetchCloudCats = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('categories')
+          .select('name')
+          .order('created_at', { ascending: true });
+        
+        if (error) throw error;
+        if (data && data.length > 0) {
+          setAvailableCats(data.map((c: any) => c.name));
+        } else {
+          // 如果数据库是空的，用老数据垫底
+          setAvailableCats(['AI', 'Tech', 'Gaming', 'Travel', 'Home Decor', 'Learning']);
+        }
+      } catch (err: any) {
+        console.error('打捞话题矩阵失败，启用本地垫底:', err.message);
+        setAvailableCats(['AI', 'Tech', 'Gaming', 'Travel', 'Home Decor', 'Learning']);
+      }
+    };
+    fetchCloudCats();
   }, []);
 
   // 1. 随机作者骰子逻辑
