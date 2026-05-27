@@ -177,7 +177,7 @@ function EditorContentComponent() {
     if (data) setAssets(data.filter(f => f.name !== '.emptyFolderPlaceholder'));
   }, []);
 
-  // 4. 重构后的核心保存/定时发布逻辑 —— 🚀 已完全闭合且加上路径限制防护锁
+  // 4. 重构后的核心保存/定时发布逻辑 —— 🚀 升级版：保存时强制逆向同步新分类
   const handleSave = async () => {
     if (!title.trim()) {
       showToast('请输入文章标题', 'error');
@@ -197,7 +197,20 @@ function EditorContentComponent() {
     }
 
     setSaving(true);
+
     try {
+      // 🎯 【铁血强控：解决分类不留存的底层大招】
+      // 检查当前选中的分类（selectedCats），如果这里面的分类在数据库现有列表（availableCats）里没有，直接强行补票进数据库！
+      if (selectedCats && selectedCats.length > 0) {
+        for (const cat of selectedCats) {
+          if (cat && !availableCats.includes(cat)) {
+            console.log(`检测到全新话题分类【${cat}】，正在强行持久化到云端...`);
+            // 顺手往 categories 表里塞一份，这样下次进来就绝对有了
+            await supabase.from('categories').insert([{ name: cat }]);
+          }
+        }
+      }
+
       const { data: { session } } = await supabase.auth.getSession();
       
       if (!session) {
@@ -208,7 +221,6 @@ function EditorContentComponent() {
         localStorage.setItem('cb_draft_content', editor?.getHTML() || '');
         
         setTimeout(() => {
-          // 🎯 核心隔离看门狗：只允许在管理端路径触发强转
           if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
             window.location.href = `/admin/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`;
           }
