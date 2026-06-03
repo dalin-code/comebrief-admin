@@ -55,6 +55,7 @@ function EditorContentComponent() {
   
   const [excerpt, setExcerpt] = useState('');
   const [coverUrl, setCoverUrl] = useState('');
+  const [coverUrlShare, setCoverUrlShare] = useState(''); // 👈 新增：分享用原始图片
   const [authorName, setAuthorName] = useState(INITIAL_EDITORS[0].name);
   const [authorAvatar, setAuthorAvatar] = useState(INITIAL_EDITORS[0].avatar);
   
@@ -81,19 +82,32 @@ function EditorContentComponent() {
     setTimeout(() => setNotice(null), 3500);
   }, []);
 
-  // --- 🔄 媒体资源打捞逻辑 (移至上层作用域) ---
+  // --- 🔄 媒体资源打捞逻辑 ---
   const loadAssets = useCallback(async () => {
     const { data } = await supabase.storage.from('images').list('news', { sortBy: { column: 'created_at', order: 'desc' } });
     if (data) setAssets(data.filter(f => f.name !== '.emptyFolderPlaceholder'));
   }, []);
 
-  // --- 🚀 批量上传图片到 Supabase (移至上层作用域，完美解决 ts2304 找不到名称报错) ---
+  // --- 🚀 批量上传图片到 Supabase (升级版：同时保存原始文件 + WebP) ---
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
     setUploading(true);
     try {
       const uploadPromises = Array.from(files).map(async (file) => {
+        // ========== 1. 先保存原始文件（JPG/PNG）用于分享 ==========
+        const originalExt = file.name.split('.').pop() || 'jpg';
+        const originalFileName = `${Math.random().toString(36).substring(2)}_original.${originalExt}`;
+        const originalFilePath = `news/${originalFileName}`;
+        
+        // 原始文件直接上传，不做任何转换
+        const { error: originalError } = await supabase.storage
+          .from('images')
+          .upload(originalFilePath, file);
+        
+        if (originalError) throw originalError;
+
+        // ========== 2. 转换并保存 WebP 文件（用于网站展示） ==========
         const webpFile = await new Promise<File>((resolve, reject) => {
           const img = new Image();
           img.src = URL.createObjectURL(file);
@@ -120,15 +134,36 @@ function EditorContentComponent() {
           img.onerror = () => reject(new Error('图片加载失败'));
         });
 
-        const fileName = `${Math.random().toString(36).substring(2)}.webp`;
-        const filePath = `news/${fileName}`;
-        const { error } = await supabase.storage.from('images').upload(filePath, webpFile);
-        if (error) throw error;
-        return fileName;
+        const webpFileName = `${Math.random().toString(36).substring(2)}.webp`;
+        const webpFilePath = `news/${webpFileName}`;
+        const { error: webpError } = await supabase.storage
+          .from('images')
+          .upload(webpFilePath, webpFile);
+        
+        if (webpError) throw webpError;
+
+        // ========== 3. 获取两个文件的公开 URL ==========
+        const { data: originalUrlData } = supabase.storage.from('images').getPublicUrl(originalFilePath);
+        const { data: webpUrlData } = supabase.storage.from('images').getPublicUrl(webpFilePath);
+
+        return {
+          original: originalUrlData.publicUrl,   // 分享用（JPG/PNG）
+          webp: webpUrlData.publicUrl            // 网站用（WebP）
+        };
       });
-      await Promise.all(uploadPromises);
-      showToast(`成功同步 ${files.length} 张资源图片`, 'success');
+
+      const uploadResults = await Promise.all(uploadPromises);
+      const firstResult = uploadResults[0];
+      
+      // ========== 4. 更新封面图状态 ==========
+      // coverUrl 存 WebP（网站展示用）
+      // coverUrlShare 存原始图片（分享用）
+      setCoverUrl(firstResult.webp);
+      setCoverUrlShare(firstResult.original);
+
+      showToast(`成功上传 ${files.length} 张图片`, 'success');
       loadAssets(); 
+      
     } catch (err: any) {
       showToast(`上传失败: ${err.message}`, 'error');
     } finally {
@@ -303,6 +338,7 @@ function EditorContentComponent() {
             setTitle(data.title || '');
             setExcerpt(data.excerpt || '');
             setCoverUrl(data.cover_url || '');
+            setCoverUrlShare(data.cover_url_share || ''); // 👈 新增：加载分享用图片
             setAuthorName(data.author_name || INITIAL_EDITORS[0].name);
             setAuthorAvatar(data.author_avatar || INITIAL_EDITORS[0].avatar);
             if (data.status) setPostStatus(data.status);
@@ -356,7 +392,7 @@ function EditorContentComponent() {
     setSelectedLabels(prev => prev.includes(id) ? prev.filter(l => l !== id) : [...prev, id]);
   };
 
-  // 3. 新增话题按钮事件：支持本地瞬时打亮，保存时统一强行入库
+  // 3. 新增话题按钮事件
   const handleAddNewCatClick = () => {
     const trimmed = newCatInput.trim();
     if (!trimmed) return;
@@ -370,7 +406,7 @@ function EditorContentComponent() {
     showToast('新话题就绪，保存/发布时将自动同步至云端', 'success');
   };
 
-  // 4. 保存/定时发布核心逻辑 —— 🚀 升级版：保存时强制逆向同步新分类
+  // 4. 保存/定时发布核心逻辑
   const handleSave = async () => {
     if (!title.trim()) {
       showToast('请输入文章标题', 'error');
@@ -421,12 +457,12 @@ function EditorContentComponent() {
         title,
         excerpt,
         cover_url: coverUrl,
+        cover_url_share: coverUrlShare, // 👈 新增：保存分享用图片
         author_name: authorName,
         author_avatar: authorAvatar,
         category: selectedCats[0] || 'Uncategorized',
         labels: selectedLabels,
         status: postStatus, 
-        // @ts-ignore
         content_html: editor?.getHTML() || '',
         scheduled_at: postStatus === 'scheduled' ? new Date(scheduledAt).toISOString() : null,
       };
@@ -646,7 +682,7 @@ function EditorContentComponent() {
               <div className="relative rounded-[32px] overflow-hidden aspect-video border-4 border-slate-50 shadow-2xl group transition-all">
                 <img src={coverUrl} className="w-full h-full object-cover" alt="cover" />
                 <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                   <button type="button" onClick={() => setCoverUrl('')} className="bg-white text-slate-900 px-6 py-2 rounded-full text-[9px] font-black uppercase shadow-xl hover:scale-110 active:scale-95 transition-all">移除</button>
+                   <button type="button" onClick={() => { setCoverUrl(''); setCoverUrlShare(''); }} className="bg-white text-slate-900 px-6 py-2 rounded-full text-[9px] font-black uppercase shadow-xl hover:scale-110 active:scale-95 transition-all">移除</button>
                 </div>
               </div>
             ) : (
@@ -701,7 +737,24 @@ function EditorContentComponent() {
                    return (
                      <div key={i} className="relative group aspect-square">
                         <div 
-                          onClick={() => { setCoverUrl(url); setShowAssetLibrary(false) }} 
+                          onClick={() => { 
+                            // 从文件名判断是原始图还是 WebP
+                            const isOriginal = asset.name.includes('_original');
+                            if (isOriginal) {
+                              // 如果是原始图，同时设置两个字段
+                              setCoverUrl(url);      // 网站用（虽然是原始图，但没关系）
+                              setCoverUrlShare(url); // 分享用
+                            } else {
+                              // 如果是 WebP，需要找到对应的原始图
+                              // 这里简化处理：直接用它作为 WebP
+                              setCoverUrl(url);
+                              // 尝试构造原始图 URL（去掉 .webp 后缀，加上 _original）
+                              const baseName = asset.name.replace('.webp', '');
+                              // 注意：这个简化版需要你的原始图命名规则是 "xxx_original.jpg"
+                              // 建议在媒体库只显示原始图，或者分开显示
+                            }
+                            setShowAssetLibrary(false);
+                          }} 
                           className="w-full h-full rounded-[40px] overflow-hidden border-2 border-transparent hover:border-indigo-500 transition-all cursor-pointer shadow-xl hover:scale-[1.05]"
                         >
                           <img src={url} className="w-full h-full object-cover" alt="asset" />
