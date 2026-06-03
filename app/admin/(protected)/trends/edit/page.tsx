@@ -13,13 +13,28 @@ import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import ImageExtension from '@tiptap/extension-image'
 
-// --- ⚙️ 初始配置 (外部静态数据) ---
+// --- ⚙️ 初始配置 (外部静态数据) - 20组多样化作者 ---
 const INITIAL_EDITORS = [
-  { name: 'Daling', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Dalin' },
-  { name: 'Nexus AI Lab', avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=Nexus' },
-  { name: 'Alex Rivera', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alex' },
-  { name: 'Jordan Smith', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Jordan' },
-  { name: 'Elena Rodriguez', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Elena' },
+  { name: 'Daling Lin', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Daling&backgroundColor=b6e3f4' },
+  { name: 'Nexus AI Lab', avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=Nexus&backgroundColor=ffd5dc' },
+  { name: 'Alex Rivera', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alex&backgroundColor=c0aede' },
+  { name: 'Jordan Smith', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Jordan&backgroundColor=ffe0a3' },
+  { name: 'Elena Rodriguez', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Elena&backgroundColor=9bd1d9' },
+  { name: 'Marcus Chen', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Marcus&backgroundColor=f5b7a8' },
+  { name: 'Sophia Williams', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Sophia&backgroundColor=cfbaf0' },
+  { name: 'Oliver Zhang', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Oliver&backgroundColor=a3c4f3' },
+  { name: 'Isabella Kim', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Isabella&backgroundColor=fbc8b5' },
+  { name: 'Ethan Wright', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Ethan&backgroundColor=c5e0b4' },
+  { name: 'Ava Martinez', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Ava&backgroundColor=ffb3ba' },
+  { name: 'Liam Johnson', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Liam&backgroundColor=baffc9' },
+  { name: 'Mia Thompson', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Mia&backgroundColor=bae1ff' },
+  { name: 'Noah Garcia', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Noah&backgroundColor=ffffba' },
+  { name: 'Charlotte Lee', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Charlotte&backgroundColor=ffb7b2' },
+  { name: 'Lucas Davis', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Lucas&backgroundColor=e2f0cb' },
+  { name: 'Amelia Brown', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Amelia&backgroundColor=d4a5a5' },
+  { name: 'Elijah Wilson', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Elijah&backgroundColor=9e7b9e' },
+  { name: 'Harper Taylor', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Harper&backgroundColor=87b38d' },
+  { name: 'Benjamin Moore', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Benjamin&backgroundColor=e5989b' },
 ]
 
 const INITIAL_LABELS = [
@@ -55,7 +70,7 @@ function EditorContentComponent() {
   
   const [excerpt, setExcerpt] = useState('');
   const [coverUrl, setCoverUrl] = useState('');
-  const [coverUrlShare, setCoverUrlShare] = useState(''); // 👈 新增：分享用原始图片
+  const [coverUrlShare, setCoverUrlShare] = useState('');
   const [authorName, setAuthorName] = useState(INITIAL_EDITORS[0].name);
   const [authorAvatar, setAuthorAvatar] = useState(INITIAL_EDITORS[0].avatar);
   
@@ -100,7 +115,6 @@ function EditorContentComponent() {
         const originalFileName = `${Math.random().toString(36).substring(2)}_original.${originalExt}`;
         const originalFilePath = `news/${originalFileName}`;
         
-        // 原始文件直接上传，不做任何转换
         const { error: originalError } = await supabase.storage
           .from('images')
           .upload(originalFilePath, file);
@@ -142,22 +156,18 @@ function EditorContentComponent() {
         
         if (webpError) throw webpError;
 
-        // ========== 3. 获取两个文件的公开 URL ==========
         const { data: originalUrlData } = supabase.storage.from('images').getPublicUrl(originalFilePath);
         const { data: webpUrlData } = supabase.storage.from('images').getPublicUrl(webpFilePath);
 
         return {
-          original: originalUrlData.publicUrl,   // 分享用（JPG/PNG）
-          webp: webpUrlData.publicUrl            // 网站用（WebP）
+          original: originalUrlData.publicUrl,
+          webp: webpUrlData.publicUrl
         };
       });
 
       const uploadResults = await Promise.all(uploadPromises);
       const firstResult = uploadResults[0];
       
-      // ========== 4. 更新封面图状态 ==========
-      // coverUrl 存 WebP（网站展示用）
-      // coverUrlShare 存原始图片（分享用）
       setCoverUrl(firstResult.webp);
       setCoverUrlShare(firstResult.original);
 
@@ -170,6 +180,35 @@ function EditorContentComponent() {
       setUploading(false);
     }
   };
+
+  // --- 将图片转换为 WebP 的辅助函数 ---
+  const convertToWebP = useCallback((file: File): Promise<File> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.src = URL.createObjectURL(file);
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return reject(new Error('Canvas context not available'));
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              const originalName = file.name.replace(/\.[^/.]+$/, "");
+              resolve(new File([blob], `${originalName}.webp`, { type: 'image/webp' }));
+            } else {
+              reject(new Error('WebP 转换失败'));
+            }
+          },
+          'image/webp',
+          0.85
+        );
+      };
+      img.onerror = () => reject(new Error('图片加载失败'));
+    });
+  }, []);
 
   // --- Tiptap 核心编辑器初始化 ---
   const editor = useEditor({
@@ -197,33 +236,7 @@ function EditorContentComponent() {
             const uploadImage = async () => {
               try {
                 setUploading(true);
-                const webpFile = await new Promise<File>((resolve, reject) => {
-                  const img = new Image();
-                  img.src = URL.createObjectURL(file);
-                  img.onload = () => {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = img.width;
-                    canvas.height = img.height;
-                    const ctx = canvas.getContext('2d');
-                    if (!ctx) return reject(new Error('Canvas context not available'));
-                    
-                    ctx.drawImage(img, 0, 0);
-                    canvas.toBlob(
-                      (blob) => {
-                        if (blob) {
-                          const originalName = file.name.replace(/\.[^/.]+$/, "");
-                          resolve(new File([blob], `${originalName}.webp`, { type: 'image/webp' }));
-                        } else {
-                          reject(new Error('WebP 转换失败'));
-                        }
-                      },
-                      'image/webp',
-                      0.85
-                    );
-                  };
-                  img.onerror = () => reject(new Error('图片加载失败'));
-                });
-
+                const webpFile = await convertToWebP(file);
                 const fileName = `${Math.random().toString(36).substring(2)}.webp`;
                 const filePath = `news/${fileName}`;
                 const { error } = await supabase.storage.from('images').upload(filePath, webpFile);
@@ -258,33 +271,7 @@ function EditorContentComponent() {
             const uploadImage = async () => {
               try {
                 setUploading(true);
-                const webpFile = await new Promise<File>((resolve, reject) => {
-                  const img = new Image();
-                  img.src = URL.createObjectURL(file);
-                  img.onload = () => {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = img.width;
-                    canvas.height = img.height;
-                    const ctx = canvas.getContext('2d');
-                    if (!ctx) return reject(new Error('Canvas context not available'));
-                    
-                    ctx.drawImage(img, 0, 0);
-                    canvas.toBlob(
-                      (blob) => {
-                        if (blob) {
-                          const originalName = file.name.replace(/\.[^/.]+$/, "");
-                          resolve(new File([blob], `${originalName}.webp`, { type: 'image/webp' }));
-                        } else {
-                          reject(new Error('WebP 转换失败'));
-                        }
-                      },
-                      'image/webp',
-                      0.85
-                    );
-                  };
-                  img.onerror = () => reject(new Error('图片加载失败'));
-                });
-
+                const webpFile = await convertToWebP(file);
                 const fileName = `${Math.random().toString(36).substring(2)}.webp`;
                 const filePath = `news/${fileName}`;
                 const { error } = await supabase.storage.from('images').upload(filePath, webpFile);
@@ -338,7 +325,7 @@ function EditorContentComponent() {
             setTitle(data.title || '');
             setExcerpt(data.excerpt || '');
             setCoverUrl(data.cover_url || '');
-            setCoverUrlShare(data.cover_url_share || ''); // 👈 新增：加载分享用图片
+            setCoverUrlShare(data.cover_url_share || '');
             setAuthorName(data.author_name || INITIAL_EDITORS[0].name);
             setAuthorAvatar(data.author_avatar || INITIAL_EDITORS[0].avatar);
             if (data.status) setPostStatus(data.status);
@@ -426,7 +413,6 @@ function EditorContentComponent() {
 
     setSaving(true);
     try {
-      // 🎯【强制补票拦截器】：保存瞬间检查是否有未入库的新话题，直接同步塞进 categories 表
       if (selectedCats && selectedCats.length > 0) {
         for (const cat of selectedCats) {
           const { data: checkData } = await supabase.from('categories').select('name').eq('name', cat);
@@ -440,9 +426,7 @@ function EditorContentComponent() {
       
       if (!session) {
         showToast('登录失效，正在为你保存草稿并跳转登录...', 'error');
-        // @ts-ignore
         localStorage.setItem('cb_draft_title', title);
-        // @ts-ignore
         localStorage.setItem('cb_draft_content', editor?.getHTML() || '');
         
         setTimeout(() => {
@@ -457,7 +441,7 @@ function EditorContentComponent() {
         title,
         excerpt,
         cover_url: coverUrl,
-        cover_url_share: coverUrlShare, // 👈 新增：保存分享用图片
+        cover_url_share: coverUrlShare,
         author_name: authorName,
         author_avatar: authorAvatar,
         category: selectedCats[0] || 'Uncategorized',
@@ -675,20 +659,37 @@ function EditorContentComponent() {
              )}
           </section>
 
-          {/* 视觉封面 (Cover) */}
+          {/* 视觉封面 (Cover) - 简化版 */}
           <section className="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm group">
             <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-400 mb-6 italic">视觉封面 (Cover)</h3>
             {coverUrl ? (
               <div className="relative rounded-[32px] overflow-hidden aspect-video border-4 border-slate-50 shadow-2xl group transition-all">
                 <img src={coverUrl} className="w-full h-full object-cover" alt="cover" />
-                <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                   <button type="button" onClick={() => { setCoverUrl(''); setCoverUrlShare(''); }} className="bg-white text-slate-900 px-6 py-2 rounded-full text-[9px] font-black uppercase shadow-xl hover:scale-110 active:scale-95 transition-all">移除</button>
+                <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
+                  <button 
+                    type="button" 
+                    onClick={() => { setCoverUrl(''); setCoverUrlShare(''); }} 
+                    className="bg-white text-slate-900 px-6 py-2 rounded-full text-[9px] font-black uppercase shadow-xl hover:scale-110 active:scale-95 transition-all"
+                  >
+                    移除
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={() => setShowAssetLibrary(true)} 
+                    className="bg-cyan-500 text-white px-6 py-2 rounded-full text-[9px] font-black uppercase shadow-xl hover:scale-110 active:scale-95 transition-all"
+                  >
+                    更换
+                  </button>
                 </div>
               </div>
             ) : (
-              <button type="button" onClick={() => setShowAssetLibrary(true)} className="w-full aspect-video border-4 border-dashed border-slate-100 rounded-[32px] flex flex-col items-center justify-center gap-4 bg-slate-50/50 hover:bg-white hover:border-indigo-500 transition-all">
+              <button 
+                type="button" 
+                onClick={() => setShowAssetLibrary(true)} 
+                className="w-full aspect-video border-4 border-dashed border-slate-100 rounded-[32px] flex flex-col items-center justify-center gap-4 bg-slate-50/50 hover:bg-white hover:border-cyan-500 transition-all"
+              >
                 <ImageIcon size={32} className="text-slate-200" />
-                <span className="text-[9px] font-black uppercase text-slate-300 italic">设置封面</span>
+                <span className="text-[9px] font-black uppercase text-slate-300 italic">点击选择封面图</span>
               </button>
             )}
           </section>
@@ -710,7 +711,7 @@ function EditorContentComponent() {
         </aside>
       </div>
 
-      {/* 🚀 媒体库核心 */}
+      {/* 🚀 媒体库核心 - 只显示原始图片，点击自动生成 WebP */}
       {showAssetLibrary && (
         <div className="fixed inset-0 z-[100] bg-slate-900/70 backdrop-blur-3xl flex justify-center items-center p-8 animate-in fade-in" onClick={() => setShowAssetLibrary(false)}>
            <div className="w-full max-w-7xl bg-white h-[90vh] rounded-[64px] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
@@ -732,36 +733,60 @@ function EditorContentComponent() {
                  <button type="button" onClick={() => setShowAssetLibrary(false)} className="w-16 h-16 border rounded-full flex items-center justify-center bg-white shadow-xl hover:rotate-90 transition-all"><X size={24}/></button>
               </header>
               <div className="flex-1 p-12 overflow-y-auto grid grid-cols-2 md:grid-cols-5 gap-10 no-scrollbar">
-                 {assets.map((asset, i) => {
-                   const url = supabase.storage.from('images').getPublicUrl(`news/${asset.name}`).data.publicUrl
-                   return (
-                     <div key={i} className="relative group aspect-square">
+                {assets
+                  .filter(asset => {
+                    // 只显示原始图片（不显示 WebP 和 _original 后缀的文件）
+                    const name = asset.name.toLowerCase();
+                    return !name.includes('.webp') && !name.includes('_original');
+                  })
+                  .map((asset, i) => {
+                    const originalUrl = supabase.storage.from('images').getPublicUrl(`news/${asset.name}`).data.publicUrl;
+                    
+                    return (
+                      <div key={i} className="relative group aspect-square">
                         <div 
-                          onClick={() => { 
-                            // 从文件名判断是原始图还是 WebP
-                            const isOriginal = asset.name.includes('_original');
-                            if (isOriginal) {
-                              // 如果是原始图，同时设置两个字段
-                              setCoverUrl(url);      // 网站用（虽然是原始图，但没关系）
-                              setCoverUrlShare(url); // 分享用
-                            } else {
-                              // 如果是 WebP，需要找到对应的原始图
-                              // 这里简化处理：直接用它作为 WebP
-                              setCoverUrl(url);
-                              // 尝试构造原始图 URL（去掉 .webp 后缀，加上 _original）
-                              const baseName = asset.name.replace('.webp', '');
-                              // 注意：这个简化版需要你的原始图命名规则是 "xxx_original.jpg"
-                              // 建议在媒体库只显示原始图，或者分开显示
+                          onClick={async () => { 
+                            setUploading(true);
+                            try {
+                              // 1. 获取原图
+                              const response = await fetch(originalUrl);
+                              const blob = await response.blob();
+                              const file = new File([blob], asset.name, { type: blob.type });
+                              
+                              // 2. 生成 WebP 版本
+                              const webpFile = await convertToWebP(file);
+                              
+                              // 3. 生成唯一文件名并上传 WebP
+                              const webpFileName = `${Math.random().toString(36).substring(2)}.webp`;
+                              const webpFilePath = `news/${webpFileName}`;
+                              const { error: webpError } = await supabase.storage
+                                .from('images')
+                                .upload(webpFilePath, webpFile);
+                              
+                              if (webpError) throw webpError;
+                              
+                              // 4. 获取 WebP 的公开 URL
+                              const { data: webpUrlData } = supabase.storage.from('images').getPublicUrl(webpFilePath);
+                              
+                              // 5. 同时设置两个字段
+                              setCoverUrl(webpUrlData.publicUrl);      // 网站用 WebP（加载快）
+                              setCoverUrlShare(originalUrl);            // 分享用原图（兼容好）
+                              
+                              showToast('封面设置成功', 'success');
+                              setShowAssetLibrary(false);
+                            } catch (err: any) {
+                              showToast(`设置失败: ${err.message}`, 'error');
+                            } finally {
+                              setUploading(false);
                             }
-                            setShowAssetLibrary(false);
                           }} 
-                          className="w-full h-full rounded-[40px] overflow-hidden border-2 border-transparent hover:border-indigo-500 transition-all cursor-pointer shadow-xl hover:scale-[1.05]"
+                          className="w-full h-full rounded-[40px] overflow-hidden border-2 border-transparent hover:border-cyan-500 transition-all cursor-pointer shadow-xl hover:scale-[1.05]"
                         >
-                          <img src={url} className="w-full h-full object-cover" alt="asset" />
+                          <img src={originalUrl} className="w-full h-full object-cover" alt="asset" />
                         </div>
-                     </div>
-                   )
-                 })}
+                      </div>
+                    );
+                  })}
               </div>
            </div>
         </div>
