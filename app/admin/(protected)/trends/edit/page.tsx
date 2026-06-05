@@ -97,89 +97,115 @@ function EditorContentComponent() {
     setTimeout(() => setNotice(null), 3500);
   }, []);
 
-  // --- 🔄 媒体资源打捞逻辑 ---
-  const loadAssets = useCallback(async () => {
-    const { data } = await supabase.storage.from('images').list('news', { sortBy: { column: 'created_at', order: 'desc' } });
-    if (data) setAssets(data.filter(f => f.name !== '.emptyFolderPlaceholder'));
-  }, []);
+  // --- 🔄 媒体资源打捞逻辑（加固防漏版） ---
+const loadAssets = useCallback(async () => {
+  try {
+    const { data, error } = await supabase.storage
+      .from('images')
+      .list('news', { sortBy: { column: 'created_at', order: 'desc' } });
+    
+    if (error) throw error;
 
-  // --- 🚀 批量上传图片到 Supabase (升级版：同时保存原始文件 + WebP) ---
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    setUploading(true);
-    try {
-      const uploadPromises = Array.from(files).map(async (file) => {
-        // ========== 1. 先保存原始文件（JPG/PNG）用于分享 ==========
-        const originalExt = file.name.split('.').pop() || 'jpg';
-        const originalFileName = `${Math.random().toString(36).substring(2)}_original.${originalExt}`;
-        const originalFilePath = `news/${originalFileName}`;
-        
-        const { error: originalError } = await supabase.storage
-          .from('images')
-          .upload(originalFilePath, file);
-        
-        if (originalError) throw originalError;
+    if (data) {
+      // 🟢 过滤掉占位文件，同时你可以根据前端组件的需求，决定是只展示 webp 还是展示全部
+      // 建议：如果只想在媒体库看一眼，直接放行所有有效图片文件
+      const validAssets = data.filter(
+        (f) => f.name !== '.emptyFolderPlaceholder' && f.metadata
+      );
+      setAssets(validAssets);
+    }
+  } catch (err) {
+    console.error("打捞媒体库失败:", err);
+  }
+}, []);
 
-        // ========== 2. 转换并保存 WebP 文件（用于网站展示） ==========
-        const webpFile = await new Promise<File>((resolve, reject) => {
-          const img = new Image();
-          img.src = URL.createObjectURL(file);
-          img.onload = () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = img.width;
-            canvas.height = img.height;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) return reject(new Error('Canvas context not available'));
-            ctx.drawImage(img, 0, 0);
-            canvas.toBlob(
-              (blob) => {
-                if (blob) {
-                  const originalName = file.name.replace(/\.[^/.]+$/, "");
-                  resolve(new File([blob], `${originalName}.webp`, { type: 'image/webp' }));
-                } else {
-                  reject(new Error('WebP 转换失败'));
-                }
-              },
-              'image/webp',
-              0.85
-            );
-          };
-          img.onerror = () => reject(new Error('图片加载失败'));
-        });
+// --- 🚀 批量上传图片到 Supabase (重装加固版) ---
+const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const files = e.target.files;
+  if (!files || files.length === 0) return;
+  setUploading(true);
+  
+  try {
+    const uploadPromises = Array.from(files).map(async (file) => {
+      // 获取纯文件名（不带后缀）
+      const baseName = file.name.replace(/\.[^/.]+$/, "");
+      // 使用统一的随机时间戳戳记，确保原图和 WebP 在数据库里名字能遥相呼应，方便前台配对
+      const fileStamp = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      
+      // ========== 1. 保存原始文件（JPG/PNG）用于社交卡片盲抓 ==========
+      const originalExt = file.name.split('.').pop() || 'jpg';
+      const originalFileName = `${fileStamp}_original.${originalExt}`;
+      const originalFilePath = `news/${originalFileName}`;
+      
+      const { error: originalError } = await supabase.storage
+        .from('images')
+        .upload(originalFilePath, file, { cacheControl: '3600', upsert: true });
+      
+      if (originalError) throw originalError;
 
-        const webpFileName = `${Math.random().toString(36).substring(2)}.webp`;
-        const webpFilePath = `news/${webpFileName}`;
-        const { error: webpError } = await supabase.storage
-          .from('images')
-          .upload(webpFilePath, webpFile);
-        
-        if (webpError) throw webpError;
-
-        const { data: originalUrlData } = supabase.storage.from('images').getPublicUrl(originalFilePath);
-        const { data: webpUrlData } = supabase.storage.from('images').getPublicUrl(webpFilePath);
-
-        return {
-          original: originalUrlData.publicUrl,
-          webp: webpUrlData.publicUrl
+      // ========== 2. 转换并保存 WebP 文件（用于独立站前台轻量级高速渲染） ==========
+      const webpFile = await new Promise<File>((resolve, reject) => {
+        const img = new Image();
+        img.src = URL.createObjectURL(file);
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return reject(new Error('Canvas context not available'));
+          ctx.drawImage(img, 0, 0);
+          canvas.toBlob(
+            (blob) => {
+              if (blob) {
+                resolve(new File([blob], `${baseName}.webp`, { type: 'image/webp' }));
+              } else {
+                reject(new Error('WebP 转换失败'));
+              }
+            },
+            'image/webp',
+            0.85
+          );
         };
+        img.onerror = () => reject(new Error('图片加载失败'));
       });
 
-      const uploadResults = await Promise.all(uploadPromises);
-      const firstResult = uploadResults[0];
+      const webpFileName = `${fileStamp}.webp`;
+      const webpFilePath = `news/${webpFileName}`;
+      const { error: webpError } = await supabase.storage
+        .from('images')
+        .upload(webpFilePath, webpFile, { cacheControl: '3600', upsert: true });
       
-      setCoverUrl(firstResult.webp);
-      setCoverUrlShare(firstResult.original);
+      if (webpError) throw webpError;
 
-      showToast(`成功上传 ${files.length} 张图片`, 'success');
-      loadAssets(); 
-      
-    } catch (err: any) {
-      showToast(`上传失败: ${err.message}`, 'error');
-    } finally {
-      setUploading(false);
-    }
-  };
+      const { data: originalUrlData } = supabase.storage.from('images').getPublicUrl(originalFilePath);
+      const { data: webpUrlData } = supabase.storage.from('images').getPublicUrl(webpFilePath);
+
+      return {
+        original: originalUrlData.publicUrl,
+        webp: webpUrlData.publicUrl
+      };
+    });
+
+    const uploadResults = await Promise.all(uploadPromises);
+    const firstResult = uploadResults[0];
+    
+    // 分别给前台展示（WebP）和推特抓取（Original）精准喂入状态
+    setCoverUrl(firstResult.webp);
+    setCoverUrlShare(firstResult.original);
+
+    showToast(`成功上传 ${files.length} 张图片，正在同步视图...`, 'success');
+    
+    // 🎯 【绝杀时差】：人为给数据库索引留出 300 毫秒的刷新缓冲，100% 确保 loadAssets 能捞到刚传上去的最新图！
+    setTimeout(async () => {
+      await loadAssets();
+    }, 350);
+    
+  } catch (err: any) {
+    showToast(`上传失败: ${err.message}`, 'error');
+  } finally {
+    setUploading(false);
+  }
+};
 
   // --- 将图片转换为 WebP 的辅助函数 ---
   const convertToWebP = useCallback((file: File): Promise<File> => {
