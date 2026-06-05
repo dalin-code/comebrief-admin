@@ -26,7 +26,7 @@ const INITIAL_EDITORS = [
   { name: 'Isabella Kim', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Isabella&backgroundColor=fbc8b5' },
   { name: 'Ethan Wright', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Ethan&backgroundColor=c5e0b4' },
   { name: 'Ava Martinez', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Ava&backgroundColor=ffb3ba' },
-  { name: 'Liam Johnson', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Liam&backgroundColor=baffc9' },
+  { name: 'Liam Johnson', avatar: 'https://api.dicebear.com/7.x/baffc9' },
   { name: 'Mia Thompson', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Mia&backgroundColor=bae1ff' },
   { name: 'Noah Garcia', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Noah&backgroundColor=ffffba' },
   { name: 'Charlotte Lee', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Charlotte&backgroundColor=ffb7b2' },
@@ -60,7 +60,6 @@ function EditorContentComponent() {
   const [title, setTitle] = useState('');
   const titleRef = useRef<HTMLTextAreaElement>(null);
 
-  // 初始化或更新 title 时自动调整高度
   useEffect(() => {
     if (titleRef.current) {
       titleRef.current.style.height = 'auto';
@@ -74,140 +73,129 @@ function EditorContentComponent() {
   const [authorName, setAuthorName] = useState(INITIAL_EDITORS[0].name);
   const [authorAvatar, setAuthorAvatar] = useState(INITIAL_EDITORS[0].avatar);
   
-  // 发布与定时状态管理
   const [postStatus, setPostStatus] = useState<'draft' | 'published' | 'scheduled'>('published');
   const [scheduledAt, setScheduledAt] = useState('');
 
-  // 🔄【矩阵持久化改造】：初始化为空，等待从云端动态加载
   const [availableCats, setAvailableCats] = useState<string[]>([]);
   const [selectedCats, setSelectedCats] = useState<string[]>([]);
   const [availableLabels, setAvailableLabels] = useState(INITIAL_LABELS);
   const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
   
-  // 交互辅助
   const [isEditingCats, setIsEditingCats] = useState(false);
   const [newCatInput, setNewCatInput] = useState('');
   const [assets, setAssets] = useState<any[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasLoadedRef = useRef(false);
 
-  // --- 🛠️ 基础提示逻辑 ---
   const showToast = useCallback((msg: string, type: 'success' | 'error') => {
     setNotice({ msg, type });
     setTimeout(() => setNotice(null), 3500);
   }, []);
 
   // --- 🔄 媒体资源打捞逻辑（加固防漏版） ---
-const loadAssets = useCallback(async () => {
-  try {
-    const { data, error } = await supabase.storage
-      .from('images')
-      .list('news', { sortBy: { column: 'created_at', order: 'desc' } });
-    
-    if (error) throw error;
-
-    if (data) {
-      // 🟢 过滤掉占位文件，同时你可以根据前端组件的需求，决定是只展示 webp 还是展示全部
-      // 建议：如果只想在媒体库看一眼，直接放行所有有效图片文件
-      const validAssets = data.filter(
-        (f) => f.name !== '.emptyFolderPlaceholder' && f.metadata
-      );
-      setAssets(validAssets);
-    }
-  } catch (err) {
-    console.error("打捞媒体库失败:", err);
-  }
-}, []);
-
-// --- 🚀 批量上传图片到 Supabase (重装加固版) ---
-const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-  const files = e.target.files;
-  if (!files || files.length === 0) return;
-  setUploading(true);
-  
-  try {
-    const uploadPromises = Array.from(files).map(async (file) => {
-      // 获取纯文件名（不带后缀）
-      const baseName = file.name.replace(/\.[^/.]+$/, "");
-      // 使用统一的随机时间戳戳记，确保原图和 WebP 在数据库里名字能遥相呼应，方便前台配对
-      const fileStamp = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      
-      // ========== 1. 保存原始文件（JPG/PNG）用于社交卡片盲抓 ==========
-      const originalExt = file.name.split('.').pop() || 'jpg';
-      const originalFileName = `${fileStamp}_original.${originalExt}`;
-      const originalFilePath = `news/${originalFileName}`;
-      
-      const { error: originalError } = await supabase.storage
+  const loadAssets = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.storage
         .from('images')
-        .upload(originalFilePath, file, { cacheControl: '3600', upsert: true });
+        .list('news', { sortBy: { column: 'created_at', order: 'desc' } });
       
-      if (originalError) throw originalError;
+      if (error) throw error;
 
-      // ========== 2. 转换并保存 WebP 文件（用于独立站前台轻量级高速渲染） ==========
-      const webpFile = await new Promise<File>((resolve, reject) => {
-        const img = new Image();
-        img.src = URL.createObjectURL(file);
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          canvas.width = img.width;
-          canvas.height = img.height;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) return reject(new Error('Canvas context not available'));
-          ctx.drawImage(img, 0, 0);
-          canvas.toBlob(
-            (blob) => {
-              if (blob) {
-                resolve(new File([blob], `${baseName}.webp`, { type: 'image/webp' }));
-              } else {
-                reject(new Error('WebP 转换失败'));
-              }
-            },
-            'image/webp',
-            0.85
-          );
+      if (data) {
+        const validAssets = data.filter(
+          (f) => f.name !== '.emptyFolderPlaceholder' && f.metadata
+        );
+        setAssets(validAssets);
+      }
+    } catch (err) {
+      console.error("打捞媒体库失败:", err);
+    }
+  }, []);
+
+  // --- 🚀 批量上传图片到 Supabase (重装加固版) ---
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    
+    try {
+      const uploadPromises = Array.from(files).map(async (file) => {
+        const baseName = file.name.replace(/\.[^/.]+$/, "");
+        const fileStamp = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        
+        // ========== 1. 保存原始文件（JPG/PNG）用于社交卡片盲抓 ==========
+        const originalExt = file.name.split('.').pop() || 'jpg';
+        const originalFileName = `${fileStamp}_original.${originalExt}`;
+        const originalFilePath = `news/${originalFileName}`;
+        
+        const { error: originalError } = await supabase.storage
+          .from('images')
+          .upload(originalFilePath, file, { cacheControl: '3600', upsert: true });
+        
+        if (originalError) throw originalError;
+
+        // ========== 2. 转换并保存 WebP 文件（用于独立站前台轻量级高速渲染） ==========
+        const webpFile = await new Promise<File>((resolve, reject) => {
+          const img = new Image();
+          img.src = URL.createObjectURL(file);
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return reject(new Error('Canvas context not available'));
+            ctx.drawImage(img, 0, 0);
+            canvas.toBlob(
+              (blob) => {
+                if (blob) {
+                  resolve(new File([blob], `${baseName}.webp`, { type: 'image/webp' }));
+                } else {
+                  reject(new Error('WebP 转换失败'));
+                }
+              },
+              'image/webp',
+              0.85
+            );
+          };
+          img.onerror = () => reject(new Error('图片加载失败'));
+        });
+
+        const webpFileName = `${fileStamp}.webp`;
+        const webpFilePath = `news/${webpFileName}`;
+        const { error: webpError } = await supabase.storage
+          .from('images')
+          .upload(webpFilePath, webpFile, { cacheControl: '3600', upsert: true });
+        
+        if (webpError) throw webpError;
+
+        const { data: originalUrlData } = supabase.storage.from('images').getPublicUrl(originalFilePath);
+        const { data: webpUrlData } = supabase.storage.from('images').getPublicUrl(webpFilePath);
+
+        return {
+          original: originalUrlData.publicUrl,
+          webp: webpUrlData.publicUrl
         };
-        img.onerror = () => reject(new Error('图片加载失败'));
       });
 
-      const webpFileName = `${fileStamp}.webp`;
-      const webpFilePath = `news/${webpFileName}`;
-      const { error: webpError } = await supabase.storage
-        .from('images')
-        .upload(webpFilePath, webpFile, { cacheControl: '3600', upsert: true });
+      const uploadResults = await Promise.all(uploadPromises);
+      const firstResult = uploadResults[0];
       
-      if (webpError) throw webpError;
+      setCoverUrl(firstResult.webp);
+      setCoverUrlShare(firstResult.original);
 
-      const { data: originalUrlData } = supabase.storage.from('images').getPublicUrl(originalFilePath);
-      const { data: webpUrlData } = supabase.storage.from('images').getPublicUrl(webpFilePath);
+      showToast(`成功上传 ${files.length} 张图片，正在同步视图...`, 'success');
+      
+      setTimeout(async () => {
+        await loadAssets();
+      }, 350);
+      
+    } catch (err: any) {
+      showToast(`上传失败: ${err.message}`, 'error');
+    } finally {
+      setUploading(false);
+    }
+  };
 
-      return {
-        original: originalUrlData.publicUrl,
-        webp: webpUrlData.publicUrl
-      };
-    });
-
-    const uploadResults = await Promise.all(uploadPromises);
-    const firstResult = uploadResults[0];
-    
-    // 分别给前台展示（WebP）和推特抓取（Original）精准喂入状态
-    setCoverUrl(firstResult.webp);
-    setCoverUrlShare(firstResult.original);
-
-    showToast(`成功上传 ${files.length} 张图片，正在同步视图...`, 'success');
-    
-    // 🎯 【绝杀时差】：人为给数据库索引留出 300 毫秒的刷新缓冲，100% 确保 loadAssets 能捞到刚传上去的最新图！
-    setTimeout(async () => {
-      await loadAssets();
-    }, 350);
-    
-  } catch (err: any) {
-    showToast(`上传失败: ${err.message}`, 'error');
-  } finally {
-    setUploading(false);
-  }
-};
-
-  // --- 将图片转换为 WebP 的辅助函数 ---
   const convertToWebP = useCallback((file: File): Promise<File> => {
     return new Promise((resolve, reject) => {
       const img = new Image();
@@ -236,7 +224,6 @@ const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     });
   }, []);
 
-  // --- Tiptap 核心编辑器初始化 ---
   const editor = useEditor({
     extensions: [
       StarterKit,
@@ -327,7 +314,6 @@ const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     }
   });
 
-  // 🔄【核心加载锁】：强控挂载保护 + 动态分类打捞 + 已有文章反向回显
   useEffect(() => {
     setIsMounted(true);
     loadAssets();
@@ -389,7 +375,6 @@ const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     }
   }, [loadAssets, articleId, editor]);
 
-  // 1. 随机作者骰子逻辑
   const randomizeAuthor = () => {
     const randomIdx = Math.floor(Math.random() * INITIAL_EDITORS.length);
     setAuthorName(INITIAL_EDITORS[randomIdx].name);
@@ -397,7 +382,6 @@ const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     showToast("已随机切换编辑身份", "success");
   };
 
-  // 2. 多选切换逻辑
   const toggleCat = (cat: string) => {
     setSelectedCats(prev => prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]);
   };
@@ -405,7 +389,6 @@ const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     setSelectedLabels(prev => prev.includes(id) ? prev.filter(l => l !== id) : [...prev, id]);
   };
 
-  // 3. 新增话题按钮事件
   const handleAddNewCatClick = () => {
     const trimmed = newCatInput.trim();
     if (!trimmed) return;
@@ -419,7 +402,6 @@ const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     showToast('新话题就绪，保存/发布时将自动同步至云端', 'success');
   };
 
-  // 4. 保存/定时发布核心逻辑
   const handleSave = async () => {
     if (!title.trim()) {
       showToast('请输入文章标题', 'error');
@@ -685,7 +667,7 @@ const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
              )}
           </section>
 
-          {/* 视觉封面 (Cover) - 简化版 */}
+          {/* 视觉封面 (Cover) */}
           <section className="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm group">
             <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-400 mb-6 italic">视觉封面 (Cover)</h3>
             {coverUrl ? (
@@ -737,7 +719,7 @@ const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         </aside>
       </div>
 
-      {/* 🚀 媒体库核心 - 只显示原始图片，点击自动生成 WebP */}
+      {/* 🚀 媒体库核心 - 只收录带有 _original 的原图卡片，并自动寻找并轨对应的 WebP */}
       {showAssetLibrary && (
         <div className="fixed inset-0 z-[100] bg-slate-900/70 backdrop-blur-3xl flex justify-center items-center p-8 animate-in fade-in" onClick={() => setShowAssetLibrary(false)}>
            <div className="w-full max-w-7xl bg-white h-[90vh] rounded-[64px] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
@@ -761,9 +743,9 @@ const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
               <div className="flex-1 p-12 overflow-y-auto grid grid-cols-2 md:grid-cols-5 gap-10 no-scrollbar">
                 {assets
                   .filter(asset => {
-                    // 只显示原始图片（不显示 WebP 和 _original 后缀的文件）
-                    const name = asset.name.toLowerCase();
-                    return !name.includes('.webp') && !name.includes('_original');
+                    // 🟢 核心修正：我们在资产库面板里，【只】渲染带 _original 后缀的高清原图卡片！
+                    // 这样可以彻底避免刚才什么都抓不到导致的死白，并且把资产库视图净化为单一卡片
+                    return asset.name.toLowerCase().includes('_original.');
                   })
                   .map((asset, i) => {
                     const originalUrl = supabase.storage.from('images').getPublicUrl(`news/${asset.name}`).data.publicUrl;
@@ -774,31 +756,18 @@ const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
                           onClick={async () => { 
                             setUploading(true);
                             try {
-                              // 1. 获取原图
-                              const response = await fetch(originalUrl);
-                              const blob = await response.blob();
-                              const file = new File([blob], asset.name, { type: blob.type });
+                              // 🟢 核心解耦：算出它对应的 WebP 文件名
+                              // 比如：`17175000_abcde_original.png` -> 对应的 WebP 是 `17175000_abcde.webp`
+                              const baseStamp = asset.name.split('_original.')[0];
+                              const targetWebpName = `${baseStamp}.webp`;
                               
-                              // 2. 生成 WebP 版本
-                              const webpFile = await convertToWebP(file);
+                              const webpUrl = supabase.storage.from('images').getPublicUrl(`news/${targetWebpName}`).data.publicUrl;
                               
-                              // 3. 生成唯一文件名并上传 WebP
-                              const webpFileName = `${Math.random().toString(36).substring(2)}.webp`;
-                              const webpFilePath = `news/${webpFileName}`;
-                              const { error: webpError } = await supabase.storage
-                                .from('images')
-                                .upload(webpFilePath, webpFile);
+                              // 🎯 终极铁血双投喂：
+                              setCoverUrl(webpUrl);          // 网站前台渲染首选高压缩 WebP 流，实现 2026 极致秒开速度
+                              setCoverUrlShare(originalUrl); // 投喂给 Twitter/FB 盲抓元数据，100% 走纯正绝对路径原图，永不显示占位图
                               
-                              if (webpError) throw webpError;
-                              
-                              // 4. 获取 WebP 的公开 URL
-                              const { data: webpUrlData } = supabase.storage.from('images').getPublicUrl(webpFilePath);
-                              
-                              // 5. 同时设置两个字段
-                              setCoverUrl(webpUrlData.publicUrl);      // 网站用 WebP（加载快）
-                              setCoverUrlShare(originalUrl);            // 分享用原图（兼容好）
-                              
-                              showToast('封面设置成功', 'success');
+                              showToast('封面并轨配置成功', 'success');
                               setShowAssetLibrary(false);
                             } catch (err: any) {
                               showToast(`设置失败: ${err.message}`, 'error');
@@ -821,7 +790,6 @@ const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
   )
 }
 
-// 🛡️ 外层单次干净导出
 export default function UltimateFixedEditor() {
   return (
     <Suspense fallback={<div className="h-screen flex items-center justify-center bg-white font-black italic uppercase text-slate-300 animate-pulse tracking-[0.5em]">Synchronizing Studio Matrix...</div>}>
