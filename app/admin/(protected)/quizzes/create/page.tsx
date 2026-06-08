@@ -10,7 +10,8 @@ import {
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-// --- 🚀 AURA 核心：WebP 转码转码引擎 ---
+
+// --- 🚀 AURA 核心：WebP 转码引擎 ---
 const compressAndConvertToWebP = (file: File): Promise<File> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -53,8 +54,8 @@ function QuizEditorContent() {
   const [importJsonText, setImportJsonText] = useState(""); 
   const [toast, setToast] = useState<{ msg: string, type: 'success' | 'error' } | null>(null);
 
-  // 分类管理状态 (之前丢失的部分)
-  const [categoriesList, setCategoriesList] = useState(["Persona", "Subconscious", "Social", "Future"]);
+  // 分类管理状态
+  const [categoriesList, setCategoriesList] = useState(["Persona", "Subconscious", "Social", "Future", "Sports"]);
   const [isEditingCategories, setIsEditingCategories] = useState(false);
   const [newCategory, setNewCategory] = useState("");
 
@@ -69,7 +70,7 @@ function QuizEditorContent() {
     { id: 'personality', name: 'Personality', desc: 'Based on tag frequency.', icon: <Target size={18}/> },
   ];
 
-  // 核心业务数据
+  // 核心业务数据初始状态
   const [quizData, setQuizData] = useState({
     title: "",
     model: "score",
@@ -83,85 +84,76 @@ function QuizEditorContent() {
     results: [{ id: `r${Date.now()}`, min_score: 0, max_score: 10, title: "", description: "" }]
   });
 
-
   const showToast = (msg: string, type: 'success' | 'error') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
   };
 
-  // 🚀 核心：依赖项只留 [editId]，绝对不要放 supabase 或 quizData
-useEffect(() => {
-  if (editId) {
-    const fetchQuiz = async () => {
-      try {
-        const { data, error } = await supabase
-          .from('quizzes')
-          .select('*')
-          .eq('id', editId)
-          .single();
-        
-        if (error) throw error;
-        
-        if (data?.raw_data) {
-          setQuizData(data.raw_data);
+  // 🚀 云端异步数据回显
+  useEffect(() => {
+    if (editId) {
+      const fetchQuiz = async () => {
+        try {
+          const { data, error } = await supabase
+            .from('quizzes')
+            .select('*')
+            .eq('id', editId)
+            .single();
+          
+          if (error) throw error;
+          
+          if (data?.raw_data) {
+            // 补上一层防御，防止拿到的旧数据结构导致前台挂掉
+            const loadedData = data.raw_data;
+            if (loadedData && !loadedData.questions) loadedData.questions = [];
+            if (loadedData && !loadedData.results) loadedData.results = [];
+            setQuizData(loadedData);
+          }
+        } catch (err) {
+          console.error("Fetch quiz error:", err);
+          showToast("Failed to load quiz data.", "error");
         }
-      } catch (err) {
-        console.error("Fetch quiz error:", err);
-        showToast("Failed to load quiz data. Please check your connection.", "error");
-      }
-    };
-    fetchQuiz();
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [editId]);
+      };
+      fetchQuiz();
+    }
+  }, [editId]);
 
-  // --- 功能逻辑 ---
-  // 🚀 纠错版上传逻辑：回归 covers 路径 + 强制缓存刷新
-const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-  const file = e.target.files?.[0];
-  if (!file) return;
+  // 🚀 强效 WebP 封面同步
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-  setIsUploading(true);
-  try {
-    // 1. WebP 转码
-    const webpFile = await compressAndConvertToWebP(file);
-    
-    // 2. 这里的路径必须改回你最初成功的 "covers/"
-    const cleanName = `quiz-${Date.now()}.webp`;
-    const storagePath = `covers/${cleanName}`; 
+    setIsUploading(true);
+    try {
+      const webpFile = await compressAndConvertToWebP(file);
+      const cleanName = `quiz-${Date.now()}.webp`;
+      const storagePath = `covers/${cleanName}`; 
 
-    const { error: uploadError } = await supabase.storage
-      .from('aura')
-      .upload(storagePath, webpFile, {
-        contentType: 'image/webp',
-        upsert: true // 开启覆盖模式，更保险
-      });
+      const { error: uploadError } = await supabase.storage
+        .from('aura')
+        .upload(storagePath, webpFile, {
+          contentType: 'image/webp',
+          upsert: true 
+        });
 
-    if (uploadError) throw uploadError;
+      if (uploadError) throw uploadError;
 
-    // 3. 获取公开链接
-    const { data } = supabase.storage
-      .from('aura')
-      .getPublicUrl(storagePath);
+      const { data } = supabase.storage
+        .from('aura')
+        .getPublicUrl(storagePath);
 
-    if (!data?.publicUrl) throw new Error("Could not get public URL");
+      if (!data?.publicUrl) throw new Error("Could not get public URL");
 
-    // 4. 🚀 关键：在 URL 后面加个时间戳，强制浏览器重新加载新图，防止由于旧缓存导致的“白屏”
-    const finalUrl = `${data.publicUrl}?t=${Date.now()}`;
-
-    setQuizData(prev => ({ 
-      ...prev, 
-      cover_url: finalUrl 
-    }));
-
-    showToast("WebP Cover Updated", "success");
-  } catch (err: any) {
-    console.error("Upload Error Details:", err);
-    showToast(`Upload Failed: ${err.message || 'Unknown error'}`, "error");
-  } finally {
-    setIsUploading(false);
-  }
-};
+      const finalUrl = `${data.publicUrl}?t=${Date.now()}`;
+      setQuizData(prev => ({ ...prev, cover_url: finalUrl }));
+      showToast("WebP Cover Updated", "success");
+    } catch (err: any) {
+      console.error("Upload Error Details:", err);
+      showToast(`Upload Failed: ${err.message}`, "error");
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   const handlePublish = async () => {
     if (!quizData.title.trim()) return showToast("Title required", "error");
@@ -170,14 +162,15 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const payload = {
         title: quizData.title,
         cover_url: quizData.cover_url,
-        categories: quizData.categories,
-        tags: quizData.tags,
+        categories: quizData.categories || ["Persona"],
+        tags: quizData.tags || [],
         active: false, 
         raw_data: quizData
       };
       const { error } = editId 
         ? await supabase.from('quizzes').update(payload).eq('id', editId)
         : await supabase.from('quizzes').insert([payload]);
+      
       if (error) throw error;
       showToast("Draft Saved Successfully", "success");
       setTimeout(() => router.push('/admin/quizzes'), 1000);
@@ -188,30 +181,85 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     }
   };
 
+  // 🚀 【核心数据正位大理石拦截网】：完美对齐 AI 数据与 React 页面属性限制
   const handleTextImport = async () => {
     if (!importJsonText.trim()) return;
     setIsImporting(true);
     try {
-      const data = JSON.parse(importJsonText);
-      const items = Array.isArray(data) ? data : [data];
-      const insertPayload = items.map(q => ({
-        title: q.title,
-        raw_data: q,
-        active: false,
-        categories: q.categories || ["Persona"]
-      }));
+      const parsedData = JSON.parse(importJsonText);
+      const items = Array.isArray(parsedData) ? parsedData : [parsedData];
+      
+      const insertPayload = items.map(q => {
+        // 1. 将 AI 字段 question_text 或 title 标准清洗对齐到组件需要的字段上
+        const normalizedQuestions = (q.questions || []).map((quest: any, index: number) => ({
+          id: quest.id || `q_${Date.now()}_${index}`,
+          title: quest.question_text || quest.title || "Untitled Question", // 🎯 降维对齐，彻底干掉空标题 Bug
+          weight: quest.weight || 1.0,
+          options: (quest.options || []).map((opt: any, oIdx: number) => ({
+            id: opt.id || `o_${Date.now()}_${oIdx}`,
+            text: opt.text || "",
+            score: typeof opt.score === 'number' ? opt.score : (opt.persona_weight ? 3 : 0), // 兼容分数
+            tag: opt.tag || opt.persona_weight || "A" // 兼容人格分析权重
+          }))
+        }));
+
+        // 2. 将 AI 的结果包进行对齐规范
+        let normalizedResults = [];
+        if (q.results && Array.isArray(q.results)) {
+          normalizedResults = q.results.map((r: any, rIdx: number) => ({
+            id: r.id || `r_${Date.now()}_${rIdx}`,
+            min_score: r.min_score || 0,
+            max_score: r.max_score || 10,
+            title: r.title || "Result Title",
+            description: r.description || ""
+          }));
+        } else if (q.results && typeof q.results === 'object') {
+          // 针对通过大类 Key（如 Purist, TikToker）返回的嵌套对象进行平铺转换
+          normalizedResults = Object.keys(q.results).map((key, index) => ({
+            id: `r_${Date.now()}_${index}`,
+            min_score: index * 5,
+            max_score: (index + 1) * 5,
+            title: q.results[key].title || key,
+            description: q.results[key].description || ""
+          }));
+        }
+
+        // 3. 构建全无瑕符合 React 组件胃口的标准配置模型
+        const standardizedRawData = {
+          title: q.title || "Untitled Quiz",
+          model: q.model || (q.results && !Array.isArray(q.results) ? "personality" : "score"),
+          categories: q.categories || ["Sports"], 
+          cover_url: q.cover_url || "",
+          is_limited: q.is_limited || false,
+          tags: q.tags || [],
+          questions: normalizedQuestions,
+          results: normalizedResults
+        };
+
+        return {
+          title: standardizedRawData.title,
+          raw_data: standardizedRawData, // 🟢 此时存进去的数据极其干净、规整，前台绝不抛错
+          active: false,
+          categories: standardizedRawData.categories
+        };
+      });
+
       const { error } = await supabase.from('quizzes').insert(insertPayload);
       if (error) throw error;
-      showToast(`Imported ${items.length} Quizzes`, "success");
+      
+      showToast(`Imported ${items.length} Quizzes Successfully`, "success");
       setShowImportModal(false);
       setImportJsonText("");
       setTimeout(() => router.push('/admin/quizzes'), 1000);
-    } catch {
-      showToast("Invalid JSON Format", "error");
+    } catch (err: any) {
+      console.error("Import JSON Error:", err);
+      showToast("Invalid JSON Format or Mapping Error", "error");
     } finally {
       setIsImporting(false);
     }
   };
+
+  if (!quizData) return null;
 
   return (
     <div className="h-screen bg-[#F8F9FB] flex flex-col overflow-hidden text-left relative font-sans">
@@ -231,7 +279,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
           <button onClick={() => router.back()} className="p-2 hover:bg-slate-50 rounded-xl transition-all"><ChevronLeft size={20} /></button>
           <div className="flex items-center gap-3">
             <div className="bg-orange-500 p-2 rounded-lg text-white"><Trophy size={18} /></div>
-            <input className="bg-transparent text-lg font-black outline-none w-64 text-left border-b-2 border-transparent focus:border-orange-500" value={quizData.title} onChange={(e)=>setQuizData({...quizData, title:e.target.value})} placeholder="Enter Quiz Title..." />
+            <input className="bg-transparent text-lg font-black outline-none w-64 text-left border-b-2 border-transparent focus:border-orange-500" value={quizData.title || ""} onChange={(e)=>setQuizData({...quizData, title:e.target.value})} placeholder="Enter Quiz Title..." />
           </div>
         </div>
         <nav className="flex bg-slate-100 p-1 rounded-2xl">
@@ -256,40 +304,48 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         <aside className="w-72 bg-white border-r border-slate-200 flex flex-col shrink-0">
           <div className="p-6 border-b border-slate-50 text-[10px] font-black uppercase text-slate-400 tracking-widest">Outline</div>
           <div className="flex-1 overflow-y-auto p-4 space-y-2 no-scrollbar">
-            {quizData.questions.map((q, i) => (
+            {(quizData.questions || []).map((q, i) => (
               <button key={q.id} onClick={() => { setActiveTab('content'); setCurrentQuestionIndex(i); }} className={`w-full text-left p-4 rounded-2xl transition-all ${currentQuestionIndex === i && activeTab === 'content' ? 'bg-slate-900 text-white shadow-lg' : 'hover:bg-slate-50 text-slate-500'}`}>
                 <div className="text-[9px] font-black opacity-30 mb-1 uppercase">Q{i+1}</div>
                 <div className="text-xs font-bold line-clamp-1 italic">{q.title || "Untitled Question"}</div>
               </button>
             ))}
-            <button onClick={() => setQuizData({...quizData, questions: [...quizData.questions, { id: `q${Date.now()}`, title: "", weight: 1.0, options: [] }]})} className="w-full py-4 border-2 border-dashed border-slate-100 rounded-2xl text-[10px] font-black text-slate-300 uppercase hover:text-slate-900 transition-all">+ New Question</button>
+            <button onClick={() => setQuizData({...quizData, questions: [...(quizData.questions || []), { id: `q${Date.now()}`, title: "", weight: 1.0, options: [] }]})} className="w-full py-4 border-2 border-dashed border-slate-100 rounded-2xl text-[10px] font-black text-slate-300 uppercase hover:text-slate-900 transition-all">+ New Question</button>
           </div>
         </aside>
 
         {/* 中间编辑主区 */}
         <section className="flex-1 overflow-y-auto p-12 bg-[#FBFBFC]">
           <div className="max-w-3xl mx-auto">
-            {activeTab === 'content' && (
+            {activeTab === 'content' && quizData.questions && quizData.questions[currentQuestionIndex] && (
               <div className="bg-white rounded-[40px] border border-slate-200 p-10 shadow-sm space-y-10 animate-in fade-in">
-                <textarea className="w-full text-3xl font-black italic outline-none placeholder:text-slate-100 leading-tight text-left" value={quizData.questions[currentQuestionIndex]?.title} onChange={(e) => {
+                <textarea className="w-full text-3xl font-black italic outline-none placeholder:text-slate-100 leading-tight text-left resize-none" value={quizData.questions[currentQuestionIndex]?.title || ""} onChange={(e) => {
                   const n = [...quizData.questions]; n[currentQuestionIndex].title = e.target.value; setQuizData({...quizData, questions: n});
                 }} placeholder="What's the question?" />
+                
                 <div className="space-y-4">
                   <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Options & Scores</p>
-                  {quizData.questions[currentQuestionIndex]?.options.map((opt, oIdx) => (
+                  {(quizData.questions[currentQuestionIndex]?.options || []).map((opt, oIdx) => (
                     <div key={opt.id} className="flex gap-3 group">
-                      <input className="flex-1 bg-slate-50 border rounded-2xl px-6 py-4 text-sm font-bold outline-none focus:bg-white transition-all" value={opt.text} onChange={(e)=>{
+                      <input className="flex-1 bg-slate-50 border rounded-2xl px-6 py-4 text-sm font-bold outline-none focus:bg-white transition-all" value={opt.text || ""} onChange={(e)=>{
                         const n = [...quizData.questions]; n[currentQuestionIndex].options[oIdx].text = e.target.value; setQuizData({...quizData, questions: n});
                       }} placeholder="Option label" />
-                      <div className="w-24 bg-slate-100 rounded-2xl flex items-center px-4">
-                        <input type="number" className="bg-transparent w-full text-center font-black text-xs outline-none" value={opt.score} onChange={(e)=>{
-                           const n = [...quizData.questions]; n[currentQuestionIndex].options[oIdx].score = parseInt(e.target.value) || 0; setQuizData({...quizData, questions: n});
+                      <div className="w-24 bg-slate-100 rounded-2xl flex items-center px-4" title="Weight / Score">
+                        <span className="text-[9px] font-black text-slate-400 mr-1 uppercase">{quizData.model === 'personality' ? 'TAG' : 'PTS'}</span>
+                        <input type="text" className="bg-transparent w-full text-center font-black text-xs outline-none text-slate-700" value={quizData.model === 'personality' ? (opt.tag || "A") : (opt.score || 0)} onChange={(e)=>{
+                           const n = [...quizData.questions];
+                           if (quizData.model === 'personality') {
+                             n[currentQuestionIndex].options[oIdx].tag = e.target.value;
+                           } else {
+                             n[currentQuestionIndex].options[oIdx].score = parseInt(e.target.value) || 0;
+                           }
+                           setQuizData({...quizData, questions: n});
                         }} />
                       </div>
                       <button onClick={() => { const n = [...quizData.questions]; n[currentQuestionIndex].options.splice(oIdx, 1); setQuizData({...quizData, questions: n}); }} className="p-2 text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={18}/></button>
                     </div>
                   ))}
-                  <button onClick={() => { const n = [...quizData.questions]; n[currentQuestionIndex].options.push({ id: `o${Date.now()}`, text: "", score: 0, tag: "" }); setQuizData({...quizData, questions: n}); }} className="w-full py-4 border-2 border-dashed border-slate-100 rounded-2xl text-[10px] font-black text-slate-300 uppercase hover:text-slate-900 transition-all">+ Add Option</button>
+                  <button onClick={() => { const n = [...quizData.questions]; n[currentQuestionIndex].options.push({ id: `o${Date.now()}`, text: "", score: 0, tag: "A" }); setQuizData({...quizData, questions: n}); }} className="w-full py-4 border-2 border-dashed border-slate-100 rounded-2xl text-[10px] font-black text-slate-300 uppercase hover:text-slate-900 transition-all">+ Add Option</button>
                 </div>
               </div>
             )}
@@ -298,31 +354,33 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
               <div className="space-y-8 animate-in fade-in">
                 <div className="flex justify-between items-center pb-6 border-b border-slate-100">
                   <h3 className="text-2xl font-black italic uppercase tracking-tighter flex items-center gap-2"><Sparkles className="text-orange-500"/> Result Mapping</h3>
-                  <button onClick={() => setQuizData({...quizData, results: [...quizData.results, { id: `r${Date.now()}`, min_score: 0, max_score: 10, title: "", description: "" }]})} className="bg-slate-900 text-white px-8 py-3 rounded-2xl text-[10px] font-black uppercase shadow-lg">+ New Result</button>
+                  <button onClick={() => setQuizData({...quizData, results: [...(quizData.results || []), { id: `r${Date.now()}`, min_score: 0, max_score: 10, title: "", description: "" }]})} className="bg-slate-900 text-white px-8 py-3 rounded-2xl text-[10px] font-black uppercase shadow-lg">+ New Result</button>
                 </div>
-                {quizData.results.map((res, rIdx) => (
-                  <div key={res.id} className="bg-white rounded-[40px] border border-slate-200 p-8 flex gap-8 relative shadow-sm aura-hover-lift">
-                    <div className="w-40 space-y-3 shrink-0">
-                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Range</label>
-                       <div className="flex items-center gap-2 bg-slate-50 p-3 rounded-2xl shadow-inner border border-slate-100">
-                          <input type="number" className="bg-transparent w-full text-center font-bold text-xs outline-none" value={res.min_score} onChange={(e)=>{
-                             const n = [...quizData.results]; n[rIdx].min_score = parseInt(e.target.value) || 0; setQuizData({...quizData, results: n});
-                          }} />
-                          <span className="text-slate-200">/</span>
-                          <input type="number" className="bg-transparent w-full text-center font-bold text-xs outline-none" value={res.max_score} onChange={(e)=>{
-                             const n = [...quizData.results]; n[rIdx].max_score = parseInt(e.target.value) || 0; setQuizData({...quizData, results: n});
-                          }} />
-                       </div>
-                    </div>
+                {(quizData.results || []).map((res, rIdx) => (
+                  <div key={res.id} className="bg-white rounded-[40px] border border-slate-200 p-8 flex gap-8 relative shadow-sm hover:shadow-md transition-all">
+                    {quizData.model === 'score' && (
+                      <div className="w-40 space-y-3 shrink-0">
+                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Score Range</label>
+                         <div className="flex items-center gap-2 bg-slate-50 p-3 rounded-2xl shadow-inner border border-slate-100">
+                            <input type="number" className="bg-transparent w-full text-center font-bold text-xs outline-none" value={res.min_score || 0} onChange={(e)=>{
+                               const n = [...quizData.results]; n[rIdx].min_score = parseInt(e.target.value) || 0; setQuizData({...quizData, results: n});
+                            }} />
+                            <span className="text-slate-200">/</span>
+                            <input type="number" className="bg-transparent w-full text-center font-bold text-xs outline-none" value={res.max_score || 0} onChange={(e)=>{
+                               const n = [...quizData.results]; n[rIdx].max_score = parseInt(e.target.value) || 0; setQuizData({...quizData, results: n});
+                            }} />
+                         </div>
+                      </div>
+                    )}
                     <div className="flex-1 space-y-4">
-                       <input className="w-full text-xl font-black italic outline-none border-b-2 border-slate-50 focus:border-slate-900 transition-all bg-transparent text-left" placeholder="Result Title" value={res.title} onChange={(e)=>{
+                       <input className="w-full text-xl font-black italic outline-none border-b-2 border-slate-50 focus:border-slate-900 transition-all bg-transparent text-left" placeholder="Result Archetype Title" value={res.title || ""} onChange={(e)=>{
                           const n = [...quizData.results]; n[rIdx].title = e.target.value; setQuizData({...quizData, results: n});
                        }} />
-                       <textarea className="w-full h-24 bg-slate-50 rounded-2xl p-5 text-xs font-medium outline-none shadow-inner leading-relaxed text-left" placeholder="Provide deep analysis..." value={res.description} onChange={(e)=>{
+                       <textarea className="w-full h-24 bg-slate-50 rounded-2xl p-5 text-xs font-medium outline-none shadow-inner leading-relaxed text-left resize-none" placeholder="Provide deep psychological analysis..." value={res.description || ""} onChange={(e)=>{
                           const n = [...quizData.results]; n[rIdx].description = e.target.value; setQuizData({...quizData, results: n});
                        }} />
                     </div>
-                    <button onClick={() => { const n = [...quizData.results]; n.splice(rIdx, 1); setQuizData({...quizData, results: n}); }} className="absolute top-8 right-8 text-slate-300 hover:text-rose-500"><Trash2 size={16}/></button>
+                    <button onClick={() => { const n = [...quizData.results]; n.splice(rIdx, 1); setQuizData({...quizData, results: n}); }} className="absolute top-8 right-8 text-slate-300 hover:text-rose-500 transition-colors"><Trash2 size={16}/></button>
                   </div>
                 ))}
               </div>
@@ -341,9 +399,9 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
           </div>
         </section>
 
-        {/* 右侧配置栏 (恢复分类管理) */}
+        {/* 右侧配置栏 */}
         <aside className="w-80 bg-white border-l border-slate-200 p-8 flex flex-col gap-10 shrink-0 overflow-y-auto no-scrollbar">
-          {/* 限时模式 */}
+          {/* 限时badge模式 */}
           <div className="p-6 rounded-[32px] bg-slate-50 border border-slate-100 space-y-4">
              <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase text-slate-900 tracking-widest flex items-center gap-2"><Timer size={14} className="text-rose-500"/> Limited Mode</span>
@@ -354,7 +412,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
              <p className="text-[9px] text-slate-400 font-bold leading-relaxed italic">Enable breathing "LIMITED" badge on cover.</p>
           </div>
 
-          {/* 分类管理 (恢复) */}
+          {/* 分类配置 */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest flex items-center gap-2"><Folder size={14}/> Categories</span>
@@ -363,7 +421,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
             <div className="flex flex-wrap gap-2">
               {categoriesList.map(cat => (
                 <div key={cat} className="group relative">
-                  <button onClick={() => setQuizData(prev => ({...prev, categories: prev.categories.includes(cat) ? prev.categories.filter(c => c !== cat) : [...prev.categories, cat]}))} className={`px-4 py-2 rounded-xl text-[10px] font-bold border transition-all ${quizData.categories.includes(cat) ? 'bg-blue-50 border-blue-200 text-blue-600 shadow-sm scale-105' : 'bg-white border-slate-100 text-slate-500 hover:border-slate-300'}`}>{cat}</button>
+                  <button onClick={() => setQuizData(prev => ({...prev, categories: (prev.categories || []).includes(cat) ? (prev.categories || []).filter(c => c !== cat) : [...(prev.categories || []), cat]}))} className={`px-4 py-2 rounded-xl text-[10px] font-bold border transition-all ${((quizData.categories || [])).includes(cat) ? 'bg-blue-50 border-blue-200 text-blue-600 shadow-sm scale-105' : 'bg-white border-slate-100 text-slate-500 hover:border-slate-300'}`}>{cat}</button>
                   {isEditingCategories && (
                     <button onClick={() => setCategoriesList(prev => prev.filter(c => c !== cat))} className="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 text-white rounded-full flex items-center justify-center shadow-md"><X size={8}/></button>
                   )}
@@ -380,17 +438,17 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
             )}
           </div>
 
-          {/* 标签管理 */}
+          {/* 标签卡片 */}
           <div className="space-y-4">
             <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest block">Operational Tags</span>
             <div className="flex flex-wrap gap-2">
               {AVAILABLE_TAGS.map(tag => (
-                <button key={tag.id} onClick={() => setQuizData(prev => ({...prev, tags: prev.tags.includes(tag.id) ? prev.tags.filter(t => t !== tag.id) : [...prev.tags, tag.id]}))} className={`px-4 py-2 rounded-xl text-[10px] font-bold border transition-all ${quizData.tags.includes(tag.id) ? `${tag.color} scale-105 shadow-sm` : 'bg-white border-slate-100 text-slate-500 hover:border-slate-300'}`}>{tag.icon} {tag.label}</button>
+                <button key={tag.id} onClick={() => setQuizData(prev => ({...prev, tags: (prev.tags || []).includes(tag.id) ? (prev.tags || []).filter(t => t !== tag.id) : [...(prev.tags || []), tag.id]}))} className={`px-4 py-2 rounded-xl text-[10px] font-bold border transition-all ${((quizData.tags || [])).includes(tag.id) ? `${tag.color} scale-105 shadow-sm` : 'bg-white border-slate-100 text-slate-500 hover:border-slate-300'}`}>{tag.icon} {tag.label}</button>
               ))}
             </div>
           </div>
 
-          {/* 封面上传 (WebP 实时反馈) */}
+          {/* 实时高压缓存刷新的 WebP 上传 */}
           <div className="space-y-4">
             <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest block">Cover Vision</span>
             <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
@@ -414,7 +472,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         </aside>
       </main>
 
-      {/* 批量导入弹窗 (恢复) */}
+      {/* 批量无伤导入弹窗 */}
       {showImportModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
           <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-3xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
