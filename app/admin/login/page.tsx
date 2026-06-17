@@ -30,49 +30,22 @@ function AdminLoginContent() {
     setLoading(true)
     setMsg({ type: 'info', text: '正在验证身份...' })
 
-    try {
-      // 🚀 自救第一步：先登出一次，彻底洗净本地可能导致中间件判错的过期残存状态
-      await supabase.auth.signOut()
+    const { data, error } = await supabase.auth.signInWithPassword({ 
+      email: email.trim(), 
+      password 
+    })
 
-      // 🚀 自救第二步：正式向 Supabase 发起身份验证
-      const { data, error } = await supabase.auth.signInWithPassword({ 
-        email: email.trim(), 
-        password 
-      })
-
-      if (error || !data?.session) {
-        setMsg({ type: 'error', text: formatAuthError(error || { message: '登录失败，请稍后重试' }) })
-        setLoading(false)
-        return
-      }
-
-      // 🚀 自救第三步：验证通过，稳住状态，给浏览器留出写入 Cookie 的缓冲时间
-      setMsg({ type: 'success', text: '身份验证成功！正在同步安全凭证...' })
-
-      // 💡 让线程原地呼吸 800 毫秒，确保凭证彻底锁进 Cookie，不被中间件拦截
-      await new Promise((resolve) => setTimeout(resolve, 800))
-
-      setMsg({ type: 'success', text: '凭证同步完毕，正在安全滑入总控室...' })
-
-      // 获取重定向目标路径
-      const redirectUrl = searchParams.get('redirect') || '/admin/trends'
-
-      // 1. 优先尝试内存软路由跳转
-      router.push(redirectUrl)
-
-      // 2. ⚡ 物理电闸兜底：2.2 秒内软路由如果没反应，强制浏览器硬刷新强跳
-      setTimeout(() => {
-        console.warn("内存路由响应超时，触发物理重定向自救电闸...");
-        window.location.href = redirectUrl
-      }, 2200)
-
-    } catch (routerError: any) {
-      // 3. 🚨 只要发生任何异常，立刻弹窗反馈，绝不允许没有任何反馈！
-      alert(`总控室准入异常反馈: ${routerError.message || '网络网络异步死锁'}`)
-      const fallbackUrl = searchParams.get('redirect') || '/admin/trends'
-      window.location.href = fallbackUrl
+    if (error || !data?.session) {
+      setMsg({ type: 'error', text: formatAuthError(error || { message: '登录失败，请稍后重试' }) })
       setLoading(false)
+      return
     }
+
+    setMsg({ type: 'success', text: '验证通过，进入总控室...' })
+
+    const redirectUrl = searchParams.get('redirect')
+    await router.push(redirectUrl || '/admin/dashboard')
+    setLoading(false)
   }
 
   const tone =

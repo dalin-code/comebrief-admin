@@ -148,6 +148,39 @@ function EditorContentComponent() {
     editorProps: { 
       attributes: { 
         class: 'prose prose-slate max-w-none min-h-[600px] p-10 md:p-16 outline-none bg-white leading-relaxed text-left' 
+      },
+      
+      // 🚀【铁血并轨】：全自动劫持剪贴板粘贴，实现截图/复制图片秒级直传 Supabase
+      handlePaste: (view, event) => {
+        const items = Array.from(event.clipboardData?.items || []);
+        
+        // 在剪贴板中检索是否存在图片流（无论是微信截图、网页复制还是本地图片复制）
+        const imageItem = items.find(item => item.type.indexOf("image") !== -1);
+        
+        if (imageItem) {
+          // 🔥 拦截核心：坚决阻止浏览器把垃圾 Base64 脏数据默认塞进内容，防止数据库直接撑爆白屏
+          event.preventDefault();
+          const file = imageItem.getAsFile();
+          if (!file) return false;
+
+          showToast('已检测到赛博剪贴板图片流，正在极速压缩上传云端...', 'success');
+
+          // 投喂给你写好的高奢单张直传管道
+          uploadSingleImage(file).then(urls => {
+            // 获取当前编辑器的绝对光标位置，原位刺入上传成功的 WebP URL
+            const { schema } = view.state;
+            const node = schema.nodes.image.create({ src: urls.webpUrl });
+            const transaction = view.state.tr.replaceSelectionWith(node);
+            view.dispatch(transaction);
+            
+            showToast('图片已完美并轨转化为轻量化 WebP 注入正文！', 'success');
+          }).catch(err => {
+            showToast(`粘贴图片直传失败: ${err.message}`, 'error');
+          });
+
+          return true; // 告诉 Tiptap，这个粘贴事件已经被站长高阶消化了
+        }
+        return false; // 普通文本直接放行，不影响日常打字和改稿
       }
     }
   });
@@ -363,105 +396,106 @@ function EditorContentComponent() {
 
       <div className="max-w-[1440px] mx-auto px-8 py-12 grid grid-cols-1 lg:grid-cols-12 gap-12">
         {/* 左侧：正文编辑区 */}
-        <div className="lg:col-span-8 space-y-10">
-          <div className="space-y-6">
-            <textarea 
-              ref={titleRef}
-              value={title} 
-              onChange={e => setTitle(e.target.value)} 
-              placeholder="文章标题 (Headline Matrix)..." 
-              rows={1} 
-              className="w-full text-4xl md:text-3xl font-black text-slate-900 bg-transparent border-none outline-none italic tracking-tighter placeholder:text-slate-200 resize-none overflow-hidden text-left" 
-              style={{ minHeight: '60px' }}
-            />
-            
-            <div className="space-y-2">
-              <div className="flex justify-between items-center px-4">
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">文章摘要 (EXCERPT)</label>
-                <button 
-                  type="button" 
-                  onClick={handleAutoExtractExcerpt}
-                  className="flex items-center gap-1.5 text-[9px] font-black uppercase text-indigo-500 hover:text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full transition-all hover:scale-105"
-                >
-                  <Sparkles size={11}/> AI 一键生成摘要
-                </button>
-              </div>
-              <textarea 
-                value={excerpt} 
-                onChange={e => setExcerpt(e.target.value)}
-                placeholder="在此输入简短的内容摘要，或者点击上方 AI 自动智能提取..."
-                className="w-full p-8 bg-white rounded-[32px] border border-slate-100 outline-none text-sm text-slate-500 font-medium leading-relaxed shadow-sm focus:border-indigo-200 transition-all resize-none h-28"
-              />
-            </div>
-          </div>
-          
-          {/* 🚀 铁血重装：彻底根除遮挡、自带防穿透白底的富文本控制中心 */}
-          <div className="bg-white rounded-[48px] border border-slate-100 shadow-2xl overflow-hidden min-h-[1000px] flex flex-col">
-            {editor && (
-              <div className="flex flex-wrap items-center gap-1 p-4 border-b border-slate-200 bg-slate-50/90 sticky top-[80px] z-40 backdrop-blur-md w-full">
-                <button
-                  type="button"
-                  onClick={() => editor.chain().focus().toggleBold().run()}
-                  className={`p-2 rounded-xl transition-all ${editor.isActive('bold') ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-200/60'}`}
-                  title="加粗"
-                >
-                  <Bold size={16} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-                  className={`p-2 rounded-xl transition-all ${editor.isActive('heading', { level: 3 }) ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-200/60'}`}
-                  title="H3 标题"
-                >
-                  <Heading3 size={16} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => editor.chain().focus().toggleBulletList().run()}
-                  className={`p-2 rounded-xl transition-all ${editor.isActive('bulletList') ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-200/60'}`}
-                  title="无序列表"
-                >
-                  <List size={16} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => editor.chain().focus().toggleBlockquote().run()}
-                  className={`p-2 rounded-xl transition-all ${editor.isActive('blockquote') ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-200/60'}`}
-                  title="引用块"
-                >
-                  <Quote size={16} />
-                </button>
-                
-                <div className="w-[1px] h-4 bg-slate-200 mx-2" />
+       <div className="lg:col-span-8 space-y-10">
+  <div className="space-y-6">
+    <textarea 
+      ref={titleRef}
+      value={title} 
+      onChange={e => setTitle(e.target.value)} 
+      placeholder="文章标题 (Headline Matrix)..." 
+      rows={1} 
+      className="w-full text-4xl md:text-3xl font-black text-slate-900 bg-transparent border-none outline-none italic tracking-tighter placeholder:text-slate-200 resize-none overflow-hidden text-left" 
+      style={{ minHeight: '60px' }}
+    />
+    
+    <div className="space-y-2">
+      <div className="flex justify-between items-center px-4">
+        <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">文章摘要 (EXCERPT)</label>
+        <button 
+          type="button" 
+          onClick={handleAutoExtractExcerpt}
+          className="flex items-center gap-1.5 text-[9px] font-black uppercase text-indigo-500 hover:text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full transition-all hover:scale-105"
+        >
+          <Sparkles size={11}/> AI 一键生成摘要
+        </button>
+      </div>
+      <textarea 
+        value={excerpt} 
+        onChange={e => setExcerpt(e.target.value)}
+        placeholder="在此输入简短的内容摘要，或者点击上方 AI 自动智能提取..."
+        className="w-full p-8 bg-white rounded-[32px] border border-slate-100 outline-none text-sm text-slate-500 font-medium leading-relaxed shadow-sm focus:border-indigo-200 transition-all resize-none h-28"
+      />
+    </div>
+  </div>
+  
+  {/* 🚀 铁血重装：彻底根除遮挡、自带防穿透白底的富文本控制中心 */}
+  <div className="bg-white rounded-[48px] border border-slate-100 shadow-2xl overflow-hidden min-h-[1000px] flex flex-col relative z-10">
+    {editor && (
+      /* 🟢 修复重点：精细化控制吸顶高度（可根据前台Header高度微调为 0 或 64px），拉高 z-index 至 50，加入实体白底与轻量阴影分割线，坚决不让正文穿透 */
+      <div className="flex flex-wrap items-center gap-1 p-4 border-b border-slate-200 bg-white sticky top-0 md:top-[64px] z-50 shadow-sm w-full backdrop-blur-md">
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().toggleBold().run()}
+          className={`p-2 rounded-xl transition-all ${editor.isActive('bold') ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-200/60'}`}
+          title="加粗"
+        >
+          <Bold size={16} />
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
+          className={`p-2 rounded-xl transition-all ${editor.isActive('heading', { level: 3 }) ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-200/60'}`}
+          title="H3 标题"
+        >
+          <Heading3 size={16} />
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().toggleBulletList().run()}
+          className={`p-2 rounded-xl transition-all ${editor.isActive('bulletList') ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-200/60'}`}
+          title="无序列表"
+        >
+          <List size={16} />
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().toggleBlockquote().run()}
+          className={`p-2 rounded-xl transition-all ${editor.isActive('blockquote') ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-200/60'}`}
+          title="引用块"
+        >
+          <Quote size={16} />
+        </button>
+        
+        <div className="w-[1px] h-4 bg-slate-200 mx-2" />
 
-                {/* 富文本内部点击直调本地上传 */}
-                <label className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all cursor-pointer" title="直接上传并插入本地图片">
-                  <ImageIcon size={16} />
-                  <input 
-                    type="file" 
-                    className="hidden" 
-                    accept="image/*" 
-                    onChange={async (e) => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      showToast('正在向云端输送图片流...', 'success');
-                      try {
-                        const urls = await uploadSingleImage(file);
-                        editor.chain().focus().setImage({ src: urls.webpUrl }).run();
-                        showToast('图片成功无缝并轨插入正文！', 'success');
-                      } catch (err: any) {
-                        showToast(`插入失败: ${err.message}`, 'error');
-                      }
-                    }}
-                  />
-                </label>
-              </div>
-            )}
-            <div className="flex-1 relative">
-              <EditorContent editor={editor} />
-            </div>
-          </div>
-        </div>
+        {/* 富文本内部点击直调本地上传 */}
+        <label className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all cursor-pointer" title="直接上传并插入本地图片">
+          <ImageIcon size={16} />
+          <input 
+            type="file" 
+            className="hidden" 
+            accept="image/*" 
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              showToast('正在向云端输送图片流...', 'success');
+              try {
+                const urls = await uploadSingleImage(file);
+                editor.chain().focus().setImage({ src: urls.webpUrl }).run();
+                showToast('图片成功无缝并轨插入正文！', 'success');
+              } catch (err: any) {
+                showToast(`插入失败: ${err.message}`, 'error');
+              }
+            }}
+          />
+        </label>
+      </div>
+    )}
+    <div className="flex-1 relative p-2">
+      <EditorContent editor={editor} />
+    </div>
+  </div>
+</div>
 
         {/* 右侧：配置看板 */}
         <aside className="lg:col-span-4 space-y-8">

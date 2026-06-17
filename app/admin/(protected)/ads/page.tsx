@@ -4,9 +4,10 @@ import React, { useState, useEffect } from "react";
 import { 
   Megaphone, Laptop, Smartphone, Save, 
   CheckCircle2, AlertCircle, Globe, Layout, 
-  Upload, Link as LinkIcon, Loader2, Trash2, XCircle, Tag
+  Upload, Link as LinkIcon, Loader2, Trash2, XCircle
 } from "lucide-react";
 import { supabase } from '@/lib/supabase';
+// 🚀 1. 导入压缩库
 import imageCompression from 'browser-image-compression';
 
 // 🚀 升级版全站广告坑位矩阵
@@ -14,18 +15,15 @@ const AD_MATRIX = [
   { id: "HOME_HEADER", name: "首页 - 顶部 Header", page: "Home", ratio: "4/1 (推荐 1200x300)" },
   { id: "SIDEBAR_TOP", name: "侧边栏固定位", page: "Sidebar", ratio: "1/1 (推荐 300x300)" },
   { id: "GLOBAL_BOTTOM", name: "全站 - 底部通栏", page: "Global", ratio: "6/1 (推荐 1200x200)" },
+  
+  // 🚀 新增：全站分类列表页共用通栏（Trends / Quizzes / Stories 列表页顶部）
   { id: "LISTING_HEADER", name: "分类列表页 - 顶部通栏", page: "Listing", ratio: "5/1 (推荐 1200x240)" },
+  
+  // 🚀 新增：详情页文中原生位（长文章读到一半、或者测试题下方的黄金吸金位）
   { id: "DETAIL_CONTENT_MID", name: "详情页 - 文中原生广告", page: "Detail", ratio: "16/9 或 4/3 自适应宽度" },
+  
+  // 🚀 新增：全站底部吸附横幅（移动端和 PC 端通杀的极品高转化位）
   { id: "GLOBAL_FOOTER_STICKY", name: "全站 - 底部吸附悬浮条", page: "Global", ratio: "推荐 728x90 或 320x50" },
-];
-
-// 🚀 站长专属的 5 大内容分类大写暗号
-const AVAILABLE_CATEGORIES = [
-  { value: "AI", label: "Artificial Intelligence (AI)" },
-  { value: "TRENDS", label: "Global Trends" },
-  { value: "GAMING", label: "Gaming & Hardware" },
-  { value: "TRAVEL", label: "Digital Nomad Travel" },
-  { value: "HOME DECOR", label: "Aesthetic Home Decor" }
 ];
 
 export default function AdsAdminV3_5() {
@@ -82,25 +80,30 @@ export default function AdsAdminV3_5() {
     }
   };
 
+  // 🚀 2. 核心修改：压缩并转换图片为 WebP
   const handleUpload = async (slotId: string, file: File) => {
     setUploadProgress({ id: slotId, percent: 10 });
     
+    // 💾 A. 配置压缩选项
     const options = {
-      maxSizeMB: 0.2,            
-      maxWidthOrHeight: 1920,    
+      maxSizeMB: 0.2,            // 🚀 强行把图片压到 200KB 以下 (极度流畅)
+      maxWidthOrHeight: 1920,    // 最大宽度
       useWebWorker: true,
-      fileType: 'image/webp'     
-    };
+      fileType: 'image/webp'     // 🚀 强行转换格式为 WebP
+    }
 
     try {
       showToast('success', '正在对图片进行 ⚡ WebP 极速转换与压缩...');
+      // 💾 B. 执行压缩
       const compressedFile = await imageCompression(file, options);
       
+      // 💾 C. 准备上传，文件名后缀改为 .webp
       const fileName = `${slotId}-${Date.now()}.webp`;
       const filePath = `fallbacks/${fileName}`;
 
       setUploadProgress({ id: slotId, percent: 30 });
 
+      // 💾 D. 上传压缩后的 WebP 文件
       const { data, error: uploadError } = await supabase.storage
         .from('ad-images')
         .upload(filePath, compressedFile, { cacheControl: '3600', upsert: true });
@@ -142,7 +145,7 @@ export default function AdsAdminV3_5() {
       <div className="max-w-7xl mx-auto mb-10 flex flex-col md:flex-row md:items-end justify-between border-b border-slate-200 pb-8 gap-6">
         <div>
           <h2 className="text-3xl font-black italic uppercase tracking-tighter">Pro Ad Matrix v3.5</h2>
-          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em] mt-2">WebP 自动化分类精准变现面板已激活</p>
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em] mt-2">WebP 自动化压缩上传系统已激活</p>
         </div>
         {saveStatus && (
           <div className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2">
@@ -154,7 +157,7 @@ export default function AdsAdminV3_5() {
 
       <div className="max-w-7xl mx-auto grid gap-16">
         {AD_MATRIX.map((slot) => {
-          const config = ads.find(a => a.position === slot.id) || { active: false, ad_code: "", mobile_ad_code: "", image_url: "", link: "", category_name: "" };
+          const config = ads.find(a => a.position === slot.id) || { active: false, ad_code: "", mobile_ad_code: "", image_url: "", link: "" };
           const isUploading = uploadProgress?.id === slot.id;
           
           return (
@@ -172,27 +175,6 @@ export default function AdsAdminV3_5() {
                 <button onClick={() => handleUpdate(slot.id, { active: !config.active })} className={`relative inline-flex h-6 w-12 items-center rounded-full transition-all ${config.active ? 'bg-emerald-500' : 'bg-slate-200'}`}>
                   <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${config.active ? 'translate-x-7' : 'translate-x-1'}`} />
                 </button>
-              </div>
-
-              {/* 🚀 核心新增：分类定向精准咬合插槽 (UI 高雅适配版) */}
-              <div className="px-8 pt-6 pb-2 bg-transparent">
-                <div className="flex flex-col gap-2 max-w-xs text-left">
-                  <label className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2 text-slate-700">
-                    <Tag size={13} className="text-emerald-500" /> Niche Target Category
-                  </label>
-                  <select
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs font-bold text-slate-700 outline-none cursor-pointer transition-all hover:bg-slate-100 focus:border-slate-400"
-                    value={config.category_name || ""}
-                    onChange={(e) => handleUpdate(slot.id, { category_name: e.target.value })}
-                  >
-                    <option value="" className="text-slate-400">⚡ 全局通用广告 (不限品类)</option>
-                    {AVAILABLE_CATEGORIES.map((cat) => (
-                      <option key={cat.value} value={cat.value} className="text-slate-800 font-medium">
-                        {cat.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
               </div>
 
               {/* 代码编辑区 */}
