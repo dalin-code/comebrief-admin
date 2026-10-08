@@ -4,7 +4,8 @@ import React, { useState, useRef, useEffect, Suspense } from "react";
 import { 
   Plus, BookOpen, Image as ImageIcon, Lock, Save, ChevronLeft, 
   Coins, Trash2, X, CheckCircle2, Menu, UploadCloud, 
-  Type, LayoutPanelTop, Eye, Unlock, Loader2, AlertCircle
+  Type, LayoutPanelTop, Eye, Unlock, Loader2, AlertCircle,
+  Star, Clock
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from '@/lib/supabase';
@@ -24,6 +25,13 @@ function PublisherStudioContent() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [importJsonText, setImportJsonText] = useState("");
   const [toast, setToast] = useState<{ msg: string, type: 'success' | 'error' } | null>(null);
+
+  // --- 🚀 发布策略（与 BRIEFS / QUIZZES 同一套语义）---
+  // 默认 published：与原有「保存即上线（active: true）」的行为保持一致。
+  const [postStatus, setPostStatus] = useState<'draft' | 'published' | 'scheduled'>('published');
+  const [scheduledAt, setScheduledAt] = useState("");
+  const [isFeatured, setIsFeatured] = useState(false);
+  const [featuredOrder, setFeaturedOrder] = useState(0);
 
   // --- 核心数据结构 ---
   const [storyData, setStoryData] = useState<any>({
@@ -55,6 +63,15 @@ function PublisherStudioContent() {
         if (data && !error && data.raw_data) {
           setStoryData(data.raw_data);
         }
+        // 回填发布策略：状态 / 定时时间 / 主推位
+        if (data?.status) setPostStatus(data.status);
+        if (data?.scheduled_at) {
+          const d = new Date(data.scheduled_at);
+          const offset = d.getTimezoneOffset() * 60000;
+          setScheduledAt(new Date(d.getTime() - offset).toISOString().slice(0, 16));
+        }
+        setIsFeatured(Boolean(data?.is_featured));
+        if (data?.featured_order != null) setFeaturedOrder(Number(data.featured_order) || 0);
       };
       fetchWork();
     }
@@ -110,22 +127,71 @@ function PublisherStudioContent() {
       showToast("请输入作品标题", "error");
       return;
     }
+
+    // 定时发布必须给一个未来的时间点
+    if (postStatus === 'scheduled') {
+      if (!scheduledAt) {
+        showToast("请选择定时上线时间", "error");
+        return;
+      }
+      if (new Date(scheduledAt).getTime() <= Date.now()) {
+        showToast("定时上线时间必须晚于当前时间", "error");
+        return;
+      }
+    }
+
     setIsSaving(true);
     try {
-      const payload = {
+      // active 与 status 必须同步维护：
+      //   前台按 active 过滤，后台按 status 展示。
+      //   只改其中一个，就会出现「后台说已发布、前台看不到」的矛盾。
+      //   定时内容先保持不可见，等 cron 到点后一并翻正。
+      const isLive = postStatus === 'published';
+
+      const payload: any = {
         title: storyData.title,
         cover_url: storyData.cover_url,
-        active: true,
+        active: isLive,
+        status: postStatus,
+        scheduled_at: postStatus === 'scheduled' ? new Date(scheduledAt).toISOString() : null,
+        is_featured: isFeatured,
+        featured_order: isFeatured ? Number(featuredOrder) || 0 : 0,
         content: storyData.chapters[0]?.content_text || "",
-        raw_data: storyData 
+        raw_data: storyData
       };
+      if (isLive) payload.published_at = new Date().toISOString();
 
-      const { error } = editId 
-        ? await supabase.from('stories').update(payload).eq('id', editId)
-        : await supabase.from('stories').insert([payload]);
+      // 阶段 0 的 SQL 还没跑时，status / scheduled_at / is_featured 这些列并不存在。
+      // 沿用后台已有的「缺列就剔除该字段重试」策略，避免整套保存流程直接失败。
+      let current: any = { ...payload };
+      let saved = false;
+      let lastError: any = null;
+      for (let i = 0; i < 6; i++) {
+        const res = editId
+          ? await supabase.from('stories').update(current).eq('id', editId)
+          : await supabase.from('stories').insert([current]);
 
-      if (error) throw error;
-      showToast("连载已成功同步至云端", "success");
+        if (!res.error) { saved = true; break; }
+
+        lastError = res.error;
+        const msg = String(res.error.message || '');
+        const m1 = msg.match(/Could not find the '([^']+)' column/i);
+        const m2 = msg.match(/column\s+stories\.([a-zA-Z0-9_]+)\s+does\s+not\s+exist/i);
+        const missing = (m1?.[1] || m2?.[1] || '').trim();
+        if (missing && Object.prototype.hasOwnProperty.call(current, missing)) {
+          const next: any = { ...current };
+          delete next[missing];
+          current = next;
+          continue;
+        }
+        break;
+      }
+      if (!saved) throw lastError || new Error('save failed');
+
+      showToast(
+        postStatus === 'published' ? "连载已发布上线" : postStatus === 'scheduled' ? "已排入定时队列" : "草稿已保存",
+        "success"
+      );
       setTimeout(() => router.push('/admin/stories'), 1000);
     } catch (err: any) {
       showToast(`保存失败: ${err.message}`, "error");
@@ -201,7 +267,8 @@ function PublisherStudioContent() {
           <input className="bg-transparent text-lg font-black italic outline-none w-64 text-right mr-4 text-slate-900 border-b-2 border-transparent focus:border-slate-200" value={storyData.title} onChange={(e) => setStoryData({...storyData, title: e.target.value})} placeholder="输入作品标题..." />
           <button onClick={() => setShowImportModal(true)} className="bg-white border border-slate-200 text-slate-600 px-6 py-3 rounded-2xl text-[10px] font-black uppercase flex items-center gap-2 shadow-sm hover:bg-slate-50 transition-all"><UploadCloud size={14} /> 导入</button>
           <button onClick={handleFinalSave} disabled={isSaving} className="bg-slate-900 text-white px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-black shadow-xl flex items-center gap-2">
-            {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} 发布
+            {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}{' '}
+            {postStatus === 'published' ? '发布' : postStatus === 'scheduled' ? '定时发布' : '存草稿'}
           </button>
         </div>
       </header>
@@ -231,6 +298,62 @@ function PublisherStudioContent() {
         {/* 中间：画布编辑区 (1:1 UI 复原) */}
         <section className="flex-1 overflow-y-auto p-8 lg:p-12 bg-[#FBFBFC]">
            <div className="max-w-4xl mx-auto space-y-8">
+
+              {/* 🚀 发布策略 */}
+              <div className="bg-white rounded-[32px] p-8 border border-slate-200 shadow-sm space-y-6">
+                 <div className="flex items-center justify-between flex-wrap gap-4">
+                    <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-400 italic flex items-center gap-2 text-left">
+                       <Clock size={14}/> 发布策略
+                    </h3>
+                    <div className="grid grid-cols-3 gap-1.5 p-1.5 bg-slate-50 rounded-2xl border border-slate-100">
+                       {(['draft', 'published', 'scheduled'] as const).map(st => (
+                          <button
+                             key={st}
+                             type="button"
+                             onClick={() => setPostStatus(st)}
+                             className={`px-6 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${postStatus === st ? 'bg-slate-900 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}
+                          >
+                             {st === 'draft' ? '草稿' : st === 'published' ? '发布' : '定时'}
+                          </button>
+                       ))}
+                    </div>
+                 </div>
+
+                 {postStatus === 'scheduled' && (
+                    <div className="space-y-2 p-5 bg-indigo-50/40 rounded-3xl border border-indigo-50 max-w-sm text-left">
+                       <label className="text-[8px] font-black uppercase tracking-widest text-indigo-500 block ml-1">上线时间</label>
+                       <input
+                          type="datetime-local"
+                          value={scheduledAt}
+                          onChange={(e) => setScheduledAt(e.target.value)}
+                          className="w-full px-4 py-3 bg-white border border-slate-100 text-xs font-bold rounded-xl text-slate-700 outline-none focus:border-indigo-500"
+                       />
+                       <p className="text-[8px] text-slate-400 font-bold italic">到点后由 /api/cron/publish 自动翻成已发布。</p>
+                    </div>
+                 )}
+
+                 <div className="flex items-center gap-6 flex-wrap">
+                    <button
+                       type="button"
+                       onClick={() => setIsFeatured(v => !v)}
+                       className={`flex items-center gap-3 px-5 py-3 rounded-2xl border text-[10px] font-black uppercase tracking-widest transition-all ${isFeatured ? 'bg-amber-50 border-amber-200 text-amber-600' : 'bg-slate-50 border-transparent text-slate-400 hover:bg-slate-100'}`}
+                    >
+                       <Star size={14} fill={isFeatured ? 'currentColor' : 'none'} /> 主推 / Banner
+                    </button>
+                    {isFeatured && (
+                       <div className="flex items-center gap-3">
+                          <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">排序</span>
+                          <input
+                             type="number"
+                             value={featuredOrder}
+                             onChange={(e) => setFeaturedOrder(parseInt(e.target.value) || 0)}
+                             className="w-24 bg-slate-50 rounded-xl px-3 py-2.5 text-[11px] font-bold outline-none border border-slate-100"
+                          />
+                          <span className="text-[8px] text-slate-400 font-bold">越小越前</span>
+                       </div>
+                    )}
+                 </div>
+              </div>
               
               <div className="bg-white rounded-[32px] p-8 border border-slate-200 shadow-sm flex flex-col space-y-4">
                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">本章标题</label>

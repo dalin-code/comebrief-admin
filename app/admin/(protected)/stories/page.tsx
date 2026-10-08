@@ -3,10 +3,46 @@
 import React, { useState, useEffect } from "react";
 import { 
   Plus, Search, BookOpen, Eye, Edit3, Trash2, 
-  Layers, Loader2, Image as ImageIcon
+  Layers, Loader2, Image as ImageIcon,
+  Star, Clock, AlertCircle
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
+import { effectiveStatus, markPublishedLocally, publishDueRows } from '@/lib/scheduled';
+
+// --- 🚀 状态呈现 ---
+// 与 articles 保持同一套语义：published / draft / scheduled / failed。
+// status 列是阶段 0 新增的；列还没到位时退回用老的 active 布尔值推断。
+// 「已到点的定时内容」一律按 published 显示 —— 与前台可见性规则同源，
+// 避免出现「前台已经上线、后台还写着定时」。
+const ROW_STATUS_STYLE: Record<string, string> = {
+  published: 'bg-emerald-50 text-emerald-500',
+  scheduled: 'bg-indigo-50 text-indigo-500',
+  draft: 'bg-slate-100 text-slate-400',
+  failed: 'bg-rose-50 text-rose-500',
+};
+
+const ROW_STATUS_LABEL: Record<string, string> = {
+  published: '已发布',
+  scheduled: '定时',
+  draft: '草稿',
+  failed: '失败',
+};
+
+const rowStatus = (row: any): string => effectiveStatus(row);
+
+const formatDateTime = (value?: string | null) => {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
 
 export default function StoryListPage() {
   const router = useRouter();
@@ -22,7 +58,11 @@ export default function StoryListPage() {
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      setStories(data || []);
+
+      // 到点的定时故事先真正翻成 published（同时置 active —— 前台按 active 过滤），
+      // 再把结果合并回本地状态；写库失败不阻断列表渲染。
+      const { flipped } = await publishDueRows(supabase, "stories", data || []);
+      setStories(markPublishedLocally(data || [], flipped));
     } catch (err) {
       console.error("加载失败:", err);
     } finally {
@@ -49,6 +89,26 @@ export default function StoryListPage() {
     } catch (err: any) {
       alert(`删除失败: ${err.message || "未知错误"}`);
       console.error(err);
+    }
+  };
+
+  // 🚀 主推位切换：与 articles 写法一致，置顶时排到最前
+  const toggleFeatured = async (story: any) => {
+    const next = !story.is_featured;
+    const minOrder = stories.reduce(
+      (min, s) => (s.is_featured ? Math.min(min, Number(s.featured_order) || 0) : min),
+      0
+    );
+    const payload = next
+      ? { is_featured: true, featured_order: minOrder - 1 }
+      : { is_featured: false, featured_order: 0 };
+
+    setStories(prev => prev.map(s => (s.id === story.id ? { ...s, ...payload } : s)));
+
+    const { error } = await supabase.from('stories').update(payload).eq('id', story.id);
+    if (error) {
+      alert(`主推切换失败：${error.message}（请先执行阶段 0 的 10_schema.sql）`);
+      loadStories();
     }
   };
 
@@ -111,18 +171,38 @@ export default function StoryListPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-3 mb-1">
                       <h3 className="text-sm font-black text-slate-900 truncate uppercase italic tracking-tight">{story.title || "未命名"}</h3>
-                      <span className={`text-[8px] font-black px-2 py-0.5 rounded-md uppercase ${story.active ? 'bg-emerald-50 text-emerald-500' : 'bg-slate-100 text-slate-400'}`}>
-                          {story.active ? 'Active' : 'Draft'}
+                      <span className={`text-[8px] font-black px-2 py-0.5 rounded-md uppercase ${ROW_STATUS_STYLE[rowStatus(story)] || 'bg-slate-100 text-slate-400'}`}>
+                          {ROW_STATUS_LABEL[rowStatus(story)] || rowStatus(story)}
                       </span>
+                      {story.is_featured && (
+                        <span className="text-[8px] font-black px-2 py-0.5 rounded-md uppercase bg-amber-50 text-amber-500 flex items-center gap-1">
+                          <Star size={9} fill="currentColor" /> 主推
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-4 text-[9px] font-bold text-slate-400 uppercase tracking-widest">
                        <span className="flex items-center gap-1"><Layers size={10}/> {episodeCount} Episodes</span>
                        <span className="flex items-center gap-1"><Eye size={10}/> 0 Views</span>
+                       {rowStatus(story) === 'scheduled' && story.scheduled_at && (
+                         <span className="flex items-center gap-1 text-indigo-400"><Clock size={10}/> {formatDateTime(story.scheduled_at)}</span>
+                       )}
+                       {rowStatus(story) === 'failed' && story.publish_error && (
+                         <span className="flex items-center gap-1 text-rose-400 max-w-[240px] truncate" title={story.publish_error}>
+                           <AlertCircle size={10}/> {story.publish_error}
+                         </span>
+                       )}
                     </div>
                   </div>
 
                   {/* 紧凑操作区 */}
                   <div className="flex items-center gap-2 pr-2">
+                    <button 
+                      onClick={() => toggleFeatured(story)}
+                      className={`p-2.5 rounded-xl transition-all shadow-sm ${story.is_featured ? 'bg-amber-50 text-amber-500' : 'bg-slate-50 text-slate-400 hover:bg-amber-50 hover:text-amber-500'}`}
+                      title={story.is_featured ? "取消主推" : "设为主推 / 置顶 Banner"}
+                    >
+                      <Star size={14} fill={story.is_featured ? "currentColor" : "none"} />
+                    </button>
                     <button 
                       onClick={() => router.push(`/admin/stories/create?id=${story.id}`)}
                       className="p-2.5 bg-slate-50 text-slate-400 rounded-xl hover:bg-slate-900 hover:text-white transition-all shadow-sm"

@@ -4,10 +4,51 @@ import React, { useEffect, useState, useCallback, useRef } from "react";
 import { 
   Edit3, Trash2, Plus, 
   Image as ImageIcon, 
-  Search, Info, RefreshCcw, Loader2, ArrowRight, Zap, AlertCircle
+  Search, Info, RefreshCcw, Loader2, ArrowRight, Zap, AlertCircle,
+  Star, Clock
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase"; // 🚀 关键：必须使用 import 进来的单例，不要在组件内 createClient
+import { effectiveStatus, markPublishedLocally, publishDueRows } from "@/lib/scheduled";
+
+// --- 🚀 状态呈现 ---
+// 与 articles / stories 同一套语义：published / draft / scheduled / failed。
+// status 列由阶段 0 的 10_schema.sql 新增，并按老的 active 值回填过。
+const ROW_STATUS_STYLE: Record<string, string> = {
+  published: 'bg-emerald-50 text-emerald-600',
+  scheduled: 'bg-indigo-50 text-indigo-600',
+  draft: 'bg-amber-50 text-amber-600',
+  failed: 'bg-rose-50 text-rose-600',
+};
+
+const ROW_STATUS_DOT: Record<string, string> = {
+  published: 'bg-emerald-500 animate-pulse',
+  scheduled: 'bg-indigo-500 animate-pulse',
+  draft: 'bg-slate-300',
+  failed: 'bg-rose-500',
+};
+
+const ROW_STATUS_LABEL: Record<string, string> = {
+  published: '已发布',
+  scheduled: '定时',
+  draft: '草稿',
+  failed: '失败',
+};
+
+const rowStatus = (row: any): string => effectiveStatus(row);
+
+const formatDateTime = (value?: string | null) => {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
 
 export default function QuizListPage() {
   const [quizzes, setQuizzes] = useState<any[]>([]);
@@ -32,8 +73,11 @@ export default function QuizListPage() {
         .order('created_at', { ascending: false });
       
       if (error) throw error;
-      
-      setQuizzes(data || []);
+
+      // 到点的定时测验先真正翻成 published，再合并回本地状态；
+      // 写库失败不阻断列表渲染（展示层有 effectiveStatus 兜底）。
+      const { flipped } = await publishDueRows(supabase, 'quizzes', data || []);
+      setQuizzes(markPublishedLocally(data || [], flipped));
     } catch (err) {
       console.error("Fetch Error:", err);
       setError("Failed to fetch quizzes. Please check your connection.");
@@ -53,6 +97,29 @@ export default function QuizListPage() {
     if (!confirm("Confirm to delete this quiz?")) return;
     const { error } = await supabase.from('quizzes').delete().eq('id', id);
     if (!error) fetchQuizzes(true);
+  };
+
+  // 🚀 主推位切换。
+  // 注意：ComeBrief 前台对 quizzes 【不】做 active 过滤（只有 stories 才按
+  // active 过滤），所以这里只需维护 is_featured / featured_order，
+  // 不需要同时改 active。
+  const toggleFeatured = async (quiz: any) => {
+    const next = !quiz.is_featured;
+    const minOrder = quizzes.reduce(
+      (min, q) => (q.is_featured ? Math.min(min, Number(q.featured_order) || 0) : min),
+      0
+    );
+    const payload = next
+      ? { is_featured: true, featured_order: minOrder - 1 }
+      : { is_featured: false, featured_order: 0 };
+
+    setQuizzes(prev => prev.map(q => (q.id === quiz.id ? { ...q, ...payload } : q)));
+
+    const { error } = await supabase.from('quizzes').update(payload).eq('id', quiz.id);
+    if (error) {
+      alert(`主推切换失败：${error.message}（请先执行阶段 0 的 10_schema.sql）`);
+      fetchQuizzes(true);
+    }
   };
 
   return (
@@ -112,6 +179,7 @@ export default function QuizListPage() {
                 <tr className="bg-slate-50/50 border-b border-slate-100">
                   <th className="p-8 text-[10px] font-black uppercase text-slate-400 tracking-widest">Information</th>
                   <th className="p-8 text-[10px] font-black uppercase text-slate-400 tracking-widest">Categories</th>
+                  <th className="p-8 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">Featured</th>
                   <th className="p-8 text-[10px] font-black uppercase text-slate-400 tracking-widest">Status</th>
                   <th className="p-8 text-[10px] font-black uppercase text-slate-400 tracking-widest text-right">Actions</th>
                 </tr>
@@ -147,12 +215,38 @@ export default function QuizListPage() {
                         ))}
                       </div>
                     </td>
+                    <td className="p-8 text-center">
+                      <button
+                        type="button"
+                        onClick={() => toggleFeatured(quiz)}
+                        title={quiz.is_featured ? `已是主推（排序 ${quiz.featured_order ?? 0}），点击取消` : '设为主推 / 置顶 Banner'}
+                        className={`p-3 inline-flex items-center justify-center rounded-xl border transition-all ${
+                          quiz.is_featured
+                            ? 'bg-amber-50 border-amber-200 text-amber-500'
+                            : 'bg-white border-slate-200 text-slate-300 hover:text-amber-400 hover:border-amber-200'
+                        }`}
+                      >
+                        <Star size={14} fill={quiz.is_featured ? 'currentColor' : 'none'} />
+                      </button>
+                    </td>
                     <td className="p-8">
-                       <div className="flex items-center gap-2">
-                         <div className={`w-1.5 h-1.5 rounded-full ${quiz.active ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`} />
-                         <span className={`text-[8px] font-black uppercase ${quiz.active ? 'text-emerald-600' : 'text-slate-400'}`}>
-                           {quiz.active ? 'Live' : 'Draft'}
-                         </span>
+                       <div className="flex flex-col gap-1.5">
+                         <div className="flex items-center gap-2">
+                           <div className={`w-1.5 h-1.5 rounded-full ${ROW_STATUS_DOT[rowStatus(quiz)] || 'bg-slate-300'}`} />
+                           <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${ROW_STATUS_STYLE[rowStatus(quiz)] || 'bg-slate-100 text-slate-400'}`}>
+                             {ROW_STATUS_LABEL[rowStatus(quiz)] || rowStatus(quiz)}
+                           </span>
+                         </div>
+                         {rowStatus(quiz) === 'scheduled' && quiz.scheduled_at && (
+                           <span className="text-[8px] font-black uppercase text-indigo-400 flex items-center gap-1">
+                             <Clock size={9} /> {formatDateTime(quiz.scheduled_at)}
+                           </span>
+                         )}
+                         {rowStatus(quiz) === 'failed' && quiz.publish_error && (
+                           <span className="text-[8px] font-bold text-rose-500 flex items-center gap-1 max-w-[200px] truncate" title={quiz.publish_error}>
+                             <AlertCircle size={9} /> {quiz.publish_error}
+                           </span>
+                         )}
                        </div>
                     </td>
                     <td className="p-8 text-right">

@@ -5,14 +5,16 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { 
   Zap, BrainCircuit, ShieldCheck, 
-  LayoutDashboard, Settings, LogOut, Megaphone 
+  LayoutDashboard, Settings, LogOut, Megaphone, Tags, PenTool 
 } from "lucide-react";
 
 const MENU_ITEMS = [
   { title: "数据概览", path: "/admin", icon: <LayoutDashboard size={18} /> },
-  { title: "TRENDS 资讯", path: "/admin/trends", icon: <Zap size={18} /> },
+  { title: "BRIEFS 简报", path: "/admin/trends", icon: <Zap size={18} /> },
   { title: "QUIZZES 测试", path: "/admin/quizzes", icon: <BrainCircuit size={18} /> },
   { title: "STORIES 故事", path: "/admin/stories", icon: <ShieldCheck size={18} /> },
+  { title: "创作标签", path: "/admin/story-tags", icon: <Tags size={18} /> },
+  { title: "写作风格", path: "/admin/story-skills", icon: <PenTool size={18} /> },
   { title: "ADS 广告管理", path: "/admin/ads", icon: <Megaphone size={18} /> }, // 👈 补上了广告管理
   { title: "系统设置", path: "/admin/settings", icon: <Settings size={18} /> },
 ];
