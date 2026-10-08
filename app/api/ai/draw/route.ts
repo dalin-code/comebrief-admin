@@ -3,7 +3,6 @@ import { createClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
-import { createRequire } from 'module'
 import { getSupabaseAdminClient } from '@/lib/supabaseAdmin'
 
 export const runtime = 'nodejs'
@@ -174,23 +173,6 @@ const parseEnvFile = (text: string) => {
   return out
 }
 
-let dotenvTried = false
-const maybeLoadDotenv = async () => {
-  if (dotenvTried) return false
-  dotenvTried = true
-  try {
-    const require = createRequire(import.meta.url)
-    const dotenv: any = require('dotenv')
-    for (const rel of cfEnvFiles) {
-      const fp = path.join(process.cwd(), rel)
-      if (fs.existsSync(fp)) dotenv.config({ path: fp })
-    }
-    return true
-  } catch {
-    return false
-  }
-}
-
 const patchCloudflareEnvFromFiles = () => {
   const sources: string[] = []
   for (const rel of cfEnvFiles) {
@@ -226,9 +208,9 @@ const patchCloudflareEnvFromFiles = () => {
 
 export async function POST(req: NextRequest) {
   const reqId = Math.random().toString(16).slice(2, 8)
-  console.log('Env Check:', !!process.env.NEXT_PUBLIC_CLOUDFLARE_ACCOUNT_ID)
-  const dotenvLoaded = await maybeLoadDotenv()
-  if (dotenvLoaded) console.log(`[ai-draw:${reqId}] dotenv loaded`)
+  // 这里不做 dotenv 补丁：Next.js 自己会加载 .env.local，本项目也从未安装 dotenv
+  // （动态 require 只会给构建日志添一行警告，那段死代码已删）。
+  // 只补 Cloudflare 那几个变量 —— 它们在部分部署环境里读不到，见 patchCloudflareEnvFromFiles。
   const patched = patchCloudflareEnvFromFiles()
   if (patched.patched) {
     console.log(`[ai-draw:${reqId}] env patched`, { sources: Array.from(new Set(patched.sources)) })
