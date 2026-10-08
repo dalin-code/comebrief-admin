@@ -1,0 +1,40 @@
+name: Publish scheduled content
+
+# 定时把到点的 scheduled 内容翻成 published。
+#
+# 为什么不去用 vercel.json 的 crons？
+# Vercel Hobby 套餐只允许「每天一次」的 cron，写 */5 会导致部署直接失败。
+# GitHub Actions 没有这个限制，所以默认走这里。
+# 如果后台项目确认在 Vercel Pro 上，可以改回 Vercel Cron（见 docs/scheduled-publishing.md）。
+#
+# 需要配置的仓库 Secrets：
+#   CRON_SECRET     —— 与 Vercel 项目环境变量里的 CRON_SECRET 保持一致
+#   ADMIN_BASE_URL  —— 可选，默认 https://admin.comebrief.com
+
+on:
+  schedule:
+    # 每 5 分钟一次。GitHub 的调度可能有几分钟抖动，对内容发布足够。
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: publish-scheduled
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping publish endpoint
+        env:
+          BASE_URL: ${{ secrets.ADMIN_BASE_URL || 'https://admin.comebrief.com' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::Repository secret CRON_SECRET is not set."
+            exit 1
+          fi
+          curl -fsS -X POST "$BASE_URL/api/cron/publish" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "accept: application/json"
