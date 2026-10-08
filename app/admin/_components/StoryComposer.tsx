@@ -231,18 +231,57 @@ export function StoryComposer({
     setError('')
   }
 
+  /**
+   * 取一张尽量新鲜的 access_token；拿不到就返回空串。
+   *
+   * 为什么不直接 getSession().session.access_token：
+   *   ① 生成 / 续写一次要跑 30–60 秒，出门时还有效的票，跑到后台可能已经过期了
+   *      —— 留 60 秒余量，快过期就先换一张。
+   *   ② token 刷新失败（网络抖动）时 getSession() 仍会返回那张旧票，发出去必然被后台判 401。
+   */
+  const getFreshToken = async (forceRefresh: boolean): Promise<string> => {
+    const { data } = await supabase.auth.getSession()
+    const session = data?.session
+    if (session && !forceRefresh) {
+      const expiresAt = session.expires_at ? session.expires_at * 1000 : Number.POSITIVE_INFINITY
+      if (expiresAt - Date.now() > 60_000) return session.access_token
+    }
+    if (forceRefresh || session) {
+      const { data: refreshed } = await supabase.auth.refreshSession()
+      if (refreshed?.session?.access_token) return refreshed.session.access_token
+    }
+    return session?.access_token || ''
+  }
+
   const apiPost = async (url: string, payload: unknown) => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    if (!session) throw new Error('登录状态失效，请刷新页面重新登录')
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-      body: JSON.stringify(payload),
-    })
+    const send = (token: string) =>
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(payload),
+      })
+
+    const token = await getFreshToken(false)
+    if (!token) throw new Error('登录状态失效，请刷新页面重新登录')
+
+    let resp = await send(token)
+    // 后台不认这张票：多半是刚刚过期 —— 换一张新的重发一次。
+    // 只重试一次（换出来的还是同一张票就不重发），避免原地打转。
+    let refreshedToken = ''
+    if (resp.status === 401) {
+      refreshedToken = await getFreshToken(true)
+      if (refreshedToken && refreshedToken !== token) resp = await send(refreshedToken)
+    }
+
     const json = await resp.json().catch(() => ({}))
-    if (!resp.ok || !json?.ok) throw new Error(json?.error || `请求失败（${resp.status}）`)
+    if (!resp.ok || !json?.ok) {
+      // 拿着刚换出来的新凭证还被拒 → 不是「过期」能解释的：这张登录态本身已经作废
+      // （在别处退出过 / 后台换了 Supabase 项目），只能重新登录。别让站长对着 unauthorized 猜。
+      if (resp.status === 401 && refreshedToken) {
+        throw new Error(`${json?.error || 'unauthorized'} —— 已自动换新登录凭证仍被拒绝，请退出后台重新登录一次`)
+      }
+      throw new Error(json?.error || `请求失败（${resp.status}）`)
+    }
     return json.data
   }
 

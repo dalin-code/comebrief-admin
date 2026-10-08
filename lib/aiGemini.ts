@@ -47,6 +47,13 @@ export const isAbortError = (e: any) =>
 /**
  * 后台接口统一鉴权 —— 必须是有效的 Supabase 登录态。
  * 失败时返回现成的 Response，调用处直接 `return result.response` 即可。
+ *
+ * 「不认这张票」其实是三件不同的事，必须分开说。以前一律回 401 unauthorized 的后果：
+ * 前端拿着这句话什么也做不了（刷新页面重发的还是同一张票，永远失败），站长也判断不出
+ * 到底该重新登录、还是该重试一次。
+ *   · 登录过期        → 401，前端可以换一张新票重发
+ *   · 票无效 / 是假的  → 401，只能重新登录
+ *   · 连不上 Supabase → 503，网络抖一下而已，重试就能好，不该当成「没权限」
  */
 export async function requireAdmin(
   req: NextRequest
@@ -57,14 +64,46 @@ export async function requireAdmin(
     return { ok: false, response: jsonResponse({ error: 'missing supabase env' }, 500) }
   }
   const token = getBearer(req)
-  if (!token) return { ok: false, response: jsonResponse({ error: 'unauthorized' }, 401) }
+  if (!token) {
+    console.log('[requireAdmin] 401：请求里没有 Authorization 头')
+    return {
+      ok: false,
+      response: jsonResponse({ error: '未登录：请求里没有 Authorization 头，请刷新页面重新登录' }, 401),
+    }
+  }
 
   const authClient = createClient(supabaseUrl, anonKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   })
-  const { data, error } = await authClient.auth.getUser(token)
-  if (error || !data?.user) return { ok: false, response: jsonResponse({ error: 'unauthorized' }, 401) }
-  return { ok: true, userId: data.user.id }
+
+  // 连不上 Supabase 属于「暂时性失败」，重试一次再判死 —— 网络抖一下就把站长的稿子卡住太亏
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { data, error } = await authClient.auth.getUser(token)
+    if (!error && data?.user) return { ok: true, userId: data.user.id }
+
+    // AuthRetryableFetchError（status 0）= 压根没跟 Supabase 说上话，不是票有问题
+    const isNetwork = error?.name === 'AuthRetryableFetchError' || error?.status === 0
+    if (isNetwork && attempt === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      continue
+    }
+    if (isNetwork) {
+      console.log('[requireAdmin] 503：连不上 Supabase Auth ——', error?.message)
+      return {
+        ok: false,
+        response: jsonResponse({ error: '登录校验暂时失败（连不上 Supabase Auth），请重试一次' }, 503),
+      }
+    }
+
+    if (/expired/i.test(String(error?.message || ''))) {
+      console.log('[requireAdmin] 401：登录已过期 ——', error?.message)
+      return { ok: false, response: jsonResponse({ error: '登录已过期，请刷新页面重新登录' }, 401) }
+    }
+    console.log('[requireAdmin] 401：token 无效 ——', error?.message || '(无 message)')
+    return { ok: false, response: jsonResponse({ error: 'unauthorized' }, 401) }
+  }
+
+  return { ok: false, response: jsonResponse({ error: 'unauthorized' }, 401) }
 }
 
 export function getGeminiConfig() {
