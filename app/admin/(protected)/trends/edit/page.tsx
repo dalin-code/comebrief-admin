@@ -9,11 +9,13 @@ import {
   Bold, Heading3, Quote, List, Sparkles, Upload, Check, Languages, AlertTriangle
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { anonStorageClient, getFreshAccessToken, isAuthTokenError } from '@/lib/clientAuth'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import ImageExtension from '@tiptap/extension-image'
 import { StoryComposer, type GeneratedStory } from '@/app/admin/_components/StoryComposer'
 import { buildArticleSlug, countChineseChars, htmlToPlainText, isUsableSlug } from '@/lib/storyPrompt'
+import type { SupabaseClient } from '@supabase/supabase-js'
 
 const INITIAL_EDITORS = [
   { name: 'Daling Lin', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Daling&backgroundColor=b6e3f4' },
@@ -30,6 +32,49 @@ const INITIAL_LABELS = [
   { id: 'featured', name: 'Staff Pick', icon: <Star size={12} />, color: 'text-purple-500 bg-purple-50' },
   { id: 'new', name: 'Fresh', icon: <Zap size={12} />, color: 'text-emerald-500 bg-emerald-50' },
 ]
+
+/**
+ * 一对待上传到 `images` 桶的图片：高清原图（投喂社交盲抓）+ 轻量 WebP（投喂前台）。
+ */
+type ImageUploadPair = {
+  originalFile: File
+  originalPath: string
+  webpFile: File
+  webpPath: string
+}
+
+/**
+ * 把「原图 + WebP」一对文件送进 `images` 桶，返回两条公开链接。
+ *
+ * 单独抽出来是因为这套动作要在三种客户端上各走一遍（登录态 / 换票重试 /
+ * 匿名兜底），写成一份才不会三处走样。
+ */
+async function putImagePair(client: SupabaseClient, pair: ImageUploadPair) {
+  const { error: originalError } = await client.storage
+    .from('images')
+    .upload(pair.originalPath, pair.originalFile, { cacheControl: '3600', upsert: true });
+  if (originalError) throw originalError;
+
+  const { error: webpError } = await client.storage
+    .from('images')
+    .upload(pair.webpPath, pair.webpFile, { cacheControl: '3600', upsert: true });
+  if (webpError) throw webpError;
+
+  return {
+    originalUrl: client.storage.from('images').getPublicUrl(pair.originalPath).data.publicUrl,
+    webpUrl: client.storage.from('images').getPublicUrl(pair.webpPath).data.publicUrl,
+  };
+}
+
+/** 把 from 挪到 to 的位置；位置无效或原地不动时返回 null（调用方据此跳过落库）。 */
+function moveItem<T>(list: T[], from: T, to: T): T[] | null {
+  const fromIdx = list.indexOf(from);
+  const toIdx = list.indexOf(to);
+  if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return null;
+  const next = [...list];
+  next.splice(toIdx, 0, next.splice(fromIdx, 1)[0]);
+  return next;
+}
 
 function EditorContentComponent() {
   const router = useRouter(); 
@@ -87,6 +132,9 @@ function EditorContentComponent() {
   
   const [isEditingCats, setIsEditingCats] = useState(false);
   const [newCatInput, setNewCatInput] = useState('');
+  // 话题矩阵拖动排序：draggingCat = 手里正提着的那张，dragOverCat = 正悬停的那张（只为落点高亮）
+  const [draggingCat, setDraggingCat] = useState<string | null>(null);
+  const [dragOverCat, setDragOverCat] = useState<string | null>(null);
   
   // 🚀 核心正位：精简物理直调本地图片所用的两个 Input 引用
   const coverFileInputRef = useRef<HTMLInputElement>(null);
@@ -97,21 +145,48 @@ function EditorContentComponent() {
     setTimeout(() => setNotice(null), 3500);
   }, []);
 
+  /**
+   * 把图片传进 Storage —— 带三层自救（站长只会看到「失败」这一个终点，
+   * 但中间那两层能把绝大多数「莫名 403」就地消化掉）：
+   *
+   *   ① 出发前先换一张没过期的票。Storage 拿的是 supabase-js 缓存的 session
+   *      token，而它不看 `exp` —— 后台标签页挂久了这就是一颗定时炸弹，
+   *      撞上去的报错是 `"exp" claim timestamp check failed`（站长看到的
+   *      「封面上传失败」就是它），跟图片、跟桶都没关系。
+   *   ② 仍然被拒 → 硬刷新换一张新票重发一次。
+   *   ③ 还是被拒 → 走不带登录态的公开通道（`images` 桶对匿名写入开放，
+   *      与前台访客同权限）。宁可图片先传上去、让站长自己去重新登录，
+   *      也不要他对着一个传不上封面的后台发呆。
+   */
+  const uploadToImages = async (pair: ImageUploadPair) => {
+    await getFreshAccessToken(false);
+    try {
+      return await putImagePair(supabase, pair);
+    } catch (err: any) {
+      if (!isAuthTokenError(err?.message)) throw err;
+      console.warn('[upload] 登录态被 Storage 拒绝，换票重试：', err?.message);
+      await getFreshAccessToken(true);
+      try {
+        return await putImagePair(supabase, pair);
+      } catch (retryErr: any) {
+        if (!isAuthTokenError(retryErr?.message)) throw retryErr;
+        console.warn('[upload] 换票后仍被拒，改走公开通道：', retryErr?.message);
+        const urls = await putImagePair(anonStorageClient, pair);
+        showToast('登录态已过期，这张图走的是公开通道。建议退出后台重新登录一次。', 'error');
+        return urls;
+      }
+    }
+  };
+
   // 🚀 核心优化 3：图片单张直传 Supabase 存储池核心逻辑（自动 WebP 压缩 + 双投喂）
   const uploadSingleImage = async (file: File) => {
-    const baseName = file.name.replace(/\.[^/.]+$/, "");
     const fileStamp = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    
-    // 1. 上传高清原图卡片（投喂社交盲抓）
+
+    // 1. 高清原图卡片（投喂社交盲抓）
     const originalExt = file.name.split('.').pop() || 'jpg';
     const originalFilePath = `news/${fileStamp}_original.${originalExt}`;
-    const { error: originalError } = await supabase.storage
-      .from('images')
-      .upload(originalFilePath, file, { cacheControl: '3600', upsert: true });
-    
-    if (originalError) throw originalError;
 
-    // 2. 上传轻量 WebP（投喂前台极速爆发）
+    // 2. 轻量 WebP（投喂前台极速爆发）
     const webpFile = await new Promise<File>((resolve, reject) => {
       const img = new Image();
       img.src = URL.createObjectURL(file);
@@ -123,24 +198,19 @@ function EditorContentComponent() {
         if (!ctx) return reject(new Error('Canvas context failure'));
         ctx.drawImage(img, 0, 0);
         canvas.toBlob((blob) => {
-          if (blob) resolve(new File([blob], `${baseName}.webp`, { type: 'image/webp' }));
+          if (blob) resolve(new File([blob], `${fileStamp}.webp`, { type: 'image/webp' }));
           else reject(new Error('WebP compression failed'));
         }, 'image/webp', 0.85);
       };
       img.onerror = () => reject(new Error('Image load failed'));
     });
 
-    const webpFilePath = `news/${fileStamp}.webp`;
-    const { error: webpError } = await supabase.storage
-      .from('images')
-      .upload(webpFilePath, webpFile, { cacheControl: '3600', upsert: true });
-    
-    if (webpError) throw webpError;
-
-    const originalUrl = supabase.storage.from('images').getPublicUrl(originalFilePath).data.publicUrl;
-    const webpUrl = supabase.storage.from('images').getPublicUrl(webpFilePath).data.publicUrl;
-
-    return { originalUrl, webpUrl };
+    return uploadToImages({
+      originalFile: file,
+      originalPath: originalFilePath,
+      webpFile,
+      webpPath: `news/${fileStamp}.webp`,
+    });
   };
 
   // 封面直接上传拦截器
@@ -215,7 +285,12 @@ function EditorContentComponent() {
         const { data: catData } = await supabase
           .from('categories')
           .select('name')
-          .order('created_at', { ascending: true });
+          // 顺序就是站长拖出来的顺序（存在 created_at 上，见
+          // app/api/admin/categories/reorder/route.ts）。
+          // 第二个 order 是必须的：同一天建出来的话题 created_at 一模一样，
+          // 只按它排的话 Postgres 每次返回的先后都能不一样，前台页签会自己跳。
+          .order('created_at', { ascending: true })
+          .order('id', { ascending: true });
         
         let currentPool = catData && catData.length > 0 
           ? catData.map((c: any) => c.name) 
@@ -288,11 +363,12 @@ function EditorContentComponent() {
     }
     setExtractingExcerpt(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('登录状态失效，请刷新页面');
+      // 换一张新鲜票：页面挂久了 getSession() 里那张可能已经被后台判过期
+      const token = await getFreshAccessToken();
+      if (!token) throw new Error('登录状态失效，请刷新页面');
       const resp = await fetch('/api/ai/excerpt', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ language: lang, title: lang === 'zh' ? titleZh : title, html: bodyHtml }),
       });
       const json = await resp.json().catch(() => ({}));
@@ -348,11 +424,11 @@ function EditorContentComponent() {
 
     setTranslating(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('登录状态失效，请刷新页面');
+      const token = await getFreshAccessToken();
+      if (!token) throw new Error('登录状态失效，请刷新页面');
       const resp = await fetch('/api/ai/translate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           title: titleZh.trim() || zhText.slice(0, 30),
           excerpt: excerptZh,
@@ -427,6 +503,45 @@ function EditorContentComponent() {
     setSelectedLabels(prev => prev.includes(id) ? prev.filter(l => l !== id) : [...prev, id]);
   };
 
+  /**
+   * 把当前的排列顺序落库（第 i 个标签 = 基准 + i 秒）。
+   *
+   * 顺序不在前端算完就算完 —— 前台「All」后面那排页签读的就是这张表，所以
+   * 存不上就得把界面退回改动前：宁可显示「没排上」，也不能让站长以为排好了、
+   * 前台却是另一个顺序。
+   */
+  const persistCatOrder = async (order: string[], previous: string[]) => {
+    try {
+      const token = await getFreshAccessToken();
+      if (!token) throw new Error('登录状态失效，请刷新页面重新登录');
+      const resp = await fetch('/api/admin/categories/reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ order }),
+      });
+      const json = await resp.json().catch(() => ({}));
+      if (!resp.ok || !json?.ok) throw new Error(json?.error || `保存顺序失败（${resp.status}）`);
+      // 前台的 /briefs 是 ISR（revalidate = 60），所以不是「立刻」，最多等一分钟
+      showToast('话题顺序已保存 —— 前台刷新后按这个顺序排（最多一分钟）', 'success');
+    } catch (e: any) {
+      setAvailableCats(previous);
+      showToast(e?.message || '保存顺序失败', 'error');
+    }
+  };
+
+  /** 松手：把手里那张插到落点那张的位置，先改界面再落库（落库失败会退回来）。 */
+  const handleCatDrop = (target: string) => {
+    const moved = draggingCat;
+    setDraggingCat(null);
+    setDragOverCat(null);
+    if (!moved) return;
+    const next = moveItem(availableCats, moved, target);
+    if (!next) return;
+    const previous = availableCats;
+    setAvailableCats(next);
+    void persistCatOrder(next, previous);
+  };
+
   const handleAddNewCatClick = () => {
     const trimmed = newCatInput.trim();
     if (!trimmed) return;
@@ -479,8 +594,8 @@ function EditorContentComponent() {
         }
       }
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
+      const token = await getFreshAccessToken();
+      if (!token) {
         showToast('登录失效，保存副本中...', 'error');
         return;
       }
@@ -819,13 +934,40 @@ function EditorContentComponent() {
                <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-400 italic text-left">话题矩阵</h3>
                <button type="button" onClick={() => setIsEditingCats(!isEditingCats)} className="text-slate-400 hover:text-indigo-600 transition-colors"><Plus size={16}/></button>
              </div>
-             <div className="flex flex-wrap gap-2 mb-8 justify-start">
-                {availableCats.map(cat => (
-                  <div key={cat} className="relative group">
+             <div className="flex flex-wrap gap-2 mb-3 justify-start">
+                {availableCats.map(cat => {
+                  const isDragging = draggingCat === cat;
+                  const isDropTarget = Boolean(draggingCat) && dragOverCat === cat && !isDragging;
+                  return (
+                  <div
+                    key={cat}
+                    className="relative group"
+                    // 落点：拖动中才生效，顺手把浏览器默认的「不允许放下」拦掉
+                    onDragOver={(e) => {
+                      if (!draggingCat) return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      setDragOverCat(prev => (prev === cat ? prev : cat));
+                    }}
+                    onDrop={(e) => { e.preventDefault(); handleCatDrop(cat); }}
+                  >
                     <button 
                       type="button"
+                      draggable
+                      onDragStart={(e) => {
+                        setDraggingCat(cat);
+                        e.dataTransfer.effectAllowed = 'move';
+                        // Firefox 不设 data 就不触发拖拽，随便塞点东西进去
+                        e.dataTransfer.setData('text/plain', cat);
+                      }}
+                      onDragEnd={() => { setDraggingCat(null); setDragOverCat(null); }}
                       onClick={() => toggleCat(cat)} 
-                      className={`px-5 py-2.5 rounded-[18px] text-[9px] font-black uppercase tracking-widest transition-all ${selectedCats.includes(cat) ? 'bg-slate-900 text-white shadow-xl scale-105' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}
+                      title="点一下选中；按住拖动可以调整先后顺序"
+                      className={`px-5 py-2.5 rounded-[18px] text-[9px] font-black uppercase tracking-widest transition-all ${
+                        selectedCats.includes(cat) ? 'bg-slate-900 text-white shadow-xl scale-105' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'
+                      } ${isDragging ? 'opacity-40 cursor-grabbing' : 'cursor-grab'} ${
+                        isDropTarget ? 'ring-2 ring-indigo-400 ring-offset-2 scale-105' : ''
+                      }`}
                     >
                       <span>{cat}</span>
                     </button>
@@ -843,8 +985,12 @@ function EditorContentComponent() {
                       </button>
                     )}
                   </div>
-                ))}
+                  );
+                })}
              </div>
+             <p className="mb-8 text-[9px] font-bold tracking-wider text-slate-300 text-left">
+               拖动标签可以调整先后顺序 —— 前台页签「All」后面就按这个顺序排
+             </p>
              {isEditingCats && (
                <div className="flex gap-2 animate-in slide-in-from-top-2">
                  <input 

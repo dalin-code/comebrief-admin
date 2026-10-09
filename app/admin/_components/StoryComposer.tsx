@@ -6,6 +6,7 @@ import {
   ClipboardCheck, Wand2,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { getFreshAccessToken } from '@/lib/clientAuth'
 import {
   DIMENSIONS,
   LENGTH_PRESETS,
@@ -245,24 +246,10 @@ export function StoryComposer({
   /**
    * 取一张尽量新鲜的 access_token；拿不到就返回空串。
    *
-   * 为什么不直接 getSession().session.access_token：
-   *   ① 生成 / 续写一次要跑 30–60 秒，出门时还有效的票，跑到后台可能已经过期了
-   *      —— 留 60 秒余量，快过期就先换一张。
-   *   ② token 刷新失败（网络抖动）时 getSession() 仍会返回那张旧票，发出去必然被后台判 401。
+   * 实现搬去了 lib/clientAuth.ts —— 封面 / 正文图片直传 Storage 要用同一份逻辑
+   * （那边还多一层「票被判定过期就换票重传」的自救），两份各写各的迟早走样。
    */
-  const getFreshToken = async (forceRefresh: boolean): Promise<string> => {
-    const { data } = await supabase.auth.getSession()
-    const session = data?.session
-    if (session && !forceRefresh) {
-      const expiresAt = session.expires_at ? session.expires_at * 1000 : Number.POSITIVE_INFINITY
-      if (expiresAt - Date.now() > 60_000) return session.access_token
-    }
-    if (forceRefresh || session) {
-      const { data: refreshed } = await supabase.auth.refreshSession()
-      if (refreshed?.session?.access_token) return refreshed.session.access_token
-    }
-    return session?.access_token || ''
-  }
+  const getFreshToken = getFreshAccessToken
 
   const apiPost = async (url: string, payload: unknown) => {
     const send = (token: string) =>
