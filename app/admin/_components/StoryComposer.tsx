@@ -57,6 +57,14 @@ export type StoryComposerProps = {
 
 const EMPTY_COMBO: StoryCombo = { length: 1500 }
 
+/**
+ * 服务端「这次没成」的状态码 —— 不是「你不该这么做」，所以值得自动重发一次。
+ * 501/500/424 之类是代码或数据的问题，重发多少次结果都一样，别浪费站长时间。
+ */
+const TRANSIENT_STATUS = new Set([502, 503])
+/** 重发前的等待：给对面一点喘息，也避免拿同一个坏连接再撞一次 */
+const TRANSIENT_RETRY_WAIT_MS = 800
+
 /** 严重度 → 徽章配色（只有这一处用，就近放着） */
 const severityTone = (s: ReviewIssue['severity']) =>
   s === 'high' ? 'bg-rose-100 text-rose-600' : s === 'mid' ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-500'
@@ -261,19 +269,42 @@ export function StoryComposer({
         body: JSON.stringify(payload),
       })
 
-    const token = await getFreshToken(false)
-    if (!token) throw new Error('登录状态失效，请刷新页面重新登录')
+    /**
+     * 一次完整投递：取新鲜票 → 401 就换票重发 → 解析 JSON。
+     * 独立成函数是因为下面「暂时性失败重发一次」时，得把这套换票逻辑再走一遍。
+     */
+    const deliver = async () => {
+      const token = await getFreshToken(false)
+      if (!token) throw new Error('登录状态失效，请刷新页面重新登录')
 
-    let resp = await send(token)
-    // 后台不认这张票：多半是刚刚过期 —— 换一张新的重发一次。
-    // 只重试一次（换出来的还是同一张票就不重发），避免原地打转。
-    let refreshedToken = ''
-    if (resp.status === 401) {
-      refreshedToken = await getFreshToken(true)
-      if (refreshedToken && refreshedToken !== token) resp = await send(refreshedToken)
+      let resp = await send(token)
+      // 后台不认这张票：多半是刚刚过期 —— 换一张新的重发一次。
+      // 只重试一次（换出来的还是同一张票就不重发），避免原地打转。
+      let refreshedToken = ''
+      if (resp.status === 401) {
+        refreshedToken = await getFreshToken(true)
+        if (refreshedToken && refreshedToken !== token) resp = await send(refreshedToken)
+      }
+
+      const json = await resp.json().catch(() => ({}))
+      return { resp, json, refreshedToken }
     }
 
-    const json = await resp.json().catch(() => ({}))
+    let { resp, json, refreshedToken } = await deliver()
+
+    /*
+     * 暂时性失败自动重发一次 —— 这两种都不是「你操作错了」，而是「这次没赶上」：
+     *   502 = 服务端到模型服务的网络断了（实测最常见：TLS 握手被中途 reset，约 5 秒就抛，
+     *         表现为一句没头没脑的 fetch failed）。这种抖一下的失败重发几乎必成。
+     *   503 = 服务端连不上 Supabase 校验登录态，同样是网络抖一下。
+     * 504 故意不重发：那说明模型已经跑了五十多秒没回话，再等一遍就是让站长干等两分钟，
+     * 不如把话讲清楚，让站长自己决定。
+     */
+    if (TRANSIENT_STATUS.has(resp.status)) {
+      await new Promise((r) => setTimeout(r, TRANSIENT_RETRY_WAIT_MS))
+      ;({ resp, json, refreshedToken } = await deliver())
+    }
+
     if (!resp.ok || !json?.ok) {
       // 拿着刚换出来的新凭证还被拒 → 不是「过期」能解释的：这张登录态本身已经作废
       // （在别处退出过 / 后台换了 Supabase 项目），只能重新登录。别让站长对着 unauthorized 猜。

@@ -82,7 +82,10 @@ export async function POST(req: NextRequest) {
       retries: 0,
       thinkingBudget: 0,
     })
-    if (ai.ok === false) return jsonResponse({ error: ai.error }, ai.status)
+    if (ai.ok === false) {
+      console.log(`[ai-rewrite:${reqId}] 模型调用失败`, { status: ai.status, error: ai.error })
+      return jsonResponse({ error: ai.error }, ai.status)
+    }
 
     const parsed = parseDelimitedStory(ai.text)
     const nextHtml = toStoryHtml(parsed.body || parsed.excerpt)

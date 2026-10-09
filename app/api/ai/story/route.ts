@@ -115,7 +115,11 @@ export async function POST(req: NextRequest) {
       // Gemini 3.x 必须关掉思考：思考 token 会和正文抢输出额度，实测会让正文只剩两百字
       thinkingBudget: 0,
     })
-    if (ai.ok === false) return jsonResponse({ error: ai.error }, ai.status)
+    if (ai.ok === false) {
+      // 以前这里静默返回：终端一个字都不打，站长只能拿着前端那句话猜
+      console.log(`[ai-story:${reqId}] 模型调用失败`, { status: ai.status, error: ai.error })
+      return jsonResponse({ error: ai.error }, ai.status)
+    }
     if (ai.truncated) warnings.push('模型输出被长度上限截断了，建议用「接着写下去」补完')
 
     const parsed = parseDelimitedStory(ai.text)

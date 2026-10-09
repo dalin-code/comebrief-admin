@@ -45,6 +45,71 @@ export const isAbortError = (e: any) =>
   e?.name === 'AbortError' || String(e?.message || '').toLowerCase().includes('aborted')
 
 /**
+ * 网络层失败的「认得出来 + 说得清楚」。
+ *
+ * 为什么需要这两个函数：
+ *   Node 的 fetch（undici）只要在收发 HTTP 之前就断了，抛出来的永远是同一句
+ *   `TypeError: fetch failed` —— 真正的原因（ECONNRESET / ENOTFOUND / 证书不认……）
+ *   藏在 error.cause 里。以前我们把 e.message 直接丢给前端，站长看到的就是一个
+ *   莫名其妙的 `fetch failed`：既不知道是自己没网、也不知道该不该重试。
+ *   实测（本机 + Google 端点）：断线发生在 TLS 握手阶段，约 5 秒就抛
+ *   `fetch failed / ECONNRESET`，请求根本没到 Google —— 这种抖动重试一次几乎必成。
+ */
+const NETWORK_ERROR_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ECONNABORTED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EPIPE',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'CERT_HAS_EXPIRED',
+  'ERR_SSL_WRONG_VERSION_NUMBER',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+])
+
+/** 是「压根没跟对面说上话」，而不是对面回的错、也不是票的问题 */
+export const isNetworkFetchError = (e: any) => {
+  if (!e) return false
+  const code = String(e?.cause?.code || e?.code || '').toUpperCase()
+  if (code.startsWith('UND_ERR')) return true
+  if (NETWORK_ERROR_CODES.has(code)) return true
+  return e?.name === 'TypeError' && /fetch failed|socket|network/i.test(String(e?.message || ''))
+}
+
+/** 把网络失败翻成一句站长看得懂、照着能做的话（英文原文留给终端日志，提示框里放不下） */
+export const describeNetworkError = (e: any) => {
+  const code = String(e?.cause?.code || e?.code || '').toUpperCase()
+  const raw = String(e?.cause?.message || e?.message || 'fetch failed').replace(/\s+/g, ' ').trim().slice(0, 60)
+  const HINTS: Record<string, string> = {
+    ECONNRESET: '连接被中途掐断（TLS 握手都没建起来，通常是本地网络抖了一下）',
+    ECONNREFUSED: '连接被拒绝（多半是代理没开）',
+    ECONNABORTED: '连接被中断',
+    ENOTFOUND: '域名解析不出来',
+    EAI_AGAIN: '域名解析超时',
+    ETIMEDOUT: '连接超时',
+    EHOSTUNREACH: '主机不可达',
+    ENETUNREACH: '网络不可达',
+    EPIPE: '连接被对面关掉了',
+    UND_ERR_CONNECT_TIMEOUT: '连接超时',
+    UND_ERR_SOCKET: '连接被对面关掉了',
+    UND_ERR_HEADERS_TIMEOUT: '对面响应太慢',
+    UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'HTTPS 证书验不过（代理或安全软件插了一手）',
+    SELF_SIGNED_CERT_IN_CHAIN: 'HTTPS 证书是自签的（多半被代理拦了）',
+    CERT_HAS_EXPIRED: 'HTTPS 证书过期了',
+  }
+  const hint = HINTS[code]
+  // 认得的 code 就只报 code —— 前端提示框很窄，英文原文没人看得下去；
+  // 不认识的才把原文带上，留给排查用。
+  const detail = hint ? code : [code, raw].filter(Boolean).join('：')
+  return `连不上模型服务：${hint || '网络不通'}（${detail || 'fetch failed'}）—— 检查网络 / 代理后重试一次`
+}
+
+/**
  * 后台接口统一鉴权 —— 必须是有效的 Supabase 登录态。
  * 失败时返回现成的 Response，调用处直接 `return result.response` 即可。
  *
@@ -164,7 +229,11 @@ export async function callGeminiText(opts: {
         error: `AI 超时（超过 ${Math.round(timeoutMs / 1000)} 秒没回应），请重试一次，或把篇幅调短`,
       }
     }
-    return { ok: false, status: 502, error: e?.message || 'AI 请求失败' }
+    return {
+      ok: false,
+      status: 502,
+      error: isNetworkFetchError(e) ? describeNetworkError(e) : e?.message || 'AI 请求失败',
+    }
   }
 
   if (!resp.ok) {

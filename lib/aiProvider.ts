@@ -31,7 +31,7 @@
  *   - Gemini：前缀相同即隐式命中，无需额外参数。
  *   - OpenAI：前缀 ≥1024 token 自动命中。
  */
-import { fetchWithTimeout, isAbortError, safeParseModelJson } from './aiGemini'
+import { describeNetworkError, fetchWithTimeout, isAbortError, isNetworkFetchError, safeParseModelJson } from './aiGemini'
 
 export type AiProviderName = 'gemini' | 'openrouter' | 'anthropic' | 'openai' | 'deepseek' | 'zhipu' | 'moonshot'
 
@@ -155,10 +155,26 @@ export type CallTextResult =
   | { ok: true; text: string; model: string; provider: AiProviderName; ms: number; truncated: boolean; attempts: number }
   | { ok: false; status: number; error: string; model: string; provider: AiProviderName | null }
 
-type RawResult = { ok: true; text: string; truncated: boolean } | { ok: false; status: number; error: string; retryable: boolean }
+type RawResult =
+  | { ok: true; text: string; truncated: boolean }
+  | {
+      ok: false
+      status: number
+      error: string
+      retryable: boolean
+      /** 网络层断线（压根没跟对面说上话），不是对方回的错 */
+      network?: boolean
+    }
 
 const RETRYABLE_STATUS = (s: number) => s === 429 || s === 500 || s === 502 || s === 503 || s === 504
 const RETRY_WAITS_MS = [1200, 3500]
+
+/** 网络抖动重试前的等待：抖一下就断的失败，没必要等一两秒 */
+const NETWORK_RETRY_WAIT_MS = 500
+/** 只有「失败来得这么快」才算网络抖动 —— 慢失败说明对面真的在忙，再等一遍只是白等 */
+const NETWORK_RETRY_FAST_MS = 12_000
+/** 重试也得给模型留出够写出一篇稿子的时间 */
+const NETWORK_RETRY_MIN_TIMEOUT_MS = 15_000
 
 /* ---------------- 协议一：Gemini 原生 ---------------- */
 
@@ -322,30 +338,65 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 async function callOnce(target: ResolvedTarget, o: CallTextOptions): Promise<RawResult> {
   const retries = typeof o.retries === 'number' ? o.retries : 1
+  const baseTimeoutMs = o.timeoutMs ?? 55000
+  let opts = o
   let last: RawResult = { ok: false, status: 500, error: '未知错误', retryable: false }
+  // 调用方给的 retries 是业务上的判断（写正文明确传 0：怕重试把 60 秒预算吃光）。
+  // 但「网络层没跟对面说上话就断了」跟「模型写得慢」完全是两回事 —— 前者几秒就抛，
+  // 不重试的话站长点一下「生成」，撞上五秒的 TLS 抖动就只能收获一句 fetch failed。
+  // 所以这里自带一次快速重试，而且不占用调用方的 retry 配额。
+  let networkRetryLeft = 1
+  // 快速重试靠 `attempt -= 1` 实现（不占调用方配额），所以日志不能用 attempt 当次数
+  let requestNo = 0
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     if (attempt > 0) await sleep(RETRY_WAITS_MS[Math.min(attempt - 1, RETRY_WAITS_MS.length - 1)])
+    requestNo += 1
+    const startedAt = Date.now()
     try {
       const r =
         target.protocol === 'gemini'
-          ? await callGeminiProtocol(target, o)
+          ? await callGeminiProtocol(target, opts)
           : target.protocol === 'anthropic'
-            ? await callAnthropicProtocol(target, o)
-            : await callOpenAiProtocol(target, o)
+            ? await callAnthropicProtocol(target, opts)
+            : await callOpenAiProtocol(target, opts)
       if (r.ok === true) return r
       last = r
       if (r.retryable === false) return r
     } catch (e: any) {
+      const elapsed = Date.now() - startedAt
       if (isAbortError(e)) {
         return {
           ok: false,
           status: 504,
-          error: `AI 超时（超过 ${Math.round((o.timeoutMs ?? 55000) / 1000)} 秒没回应），请重试一次，或把篇幅调短`,
+          error: `AI 超时（超过 ${Math.round(baseTimeoutMs / 1000)} 秒没回应），请重试一次，或把篇幅调短`,
           retryable: false,
         }
       }
-      last = { ok: false, status: 502, error: e?.message || 'AI 请求失败', retryable: true }
+      const network = isNetworkFetchError(e)
+      last = {
+        ok: false,
+        status: 502,
+        // undici 原始报错只有一句 fetch failed，原因（ECONNRESET 之类）藏在 cause 里 —— 得挖出来
+        error: network ? describeNetworkError(e) : e?.message || 'AI 请求失败',
+        retryable: true,
+        network,
+      }
+      // 终端日志给全量信息（含英文原文），前端提示只给人话
+      const cause = e?.cause ? ` ｜ cause=${e.cause.code || ''}: ${e.cause.message || ''}` : ''
+      console.log(
+        `[ai-provider] ${target.label}/${target.model} 第 ${requestNo} 次请求异常（${elapsed}ms）：${last.error}${cause}`
+      )
+      if (network && networkRetryLeft > 0 && elapsed < NETWORK_RETRY_FAST_MS) {
+        networkRetryLeft -= 1
+        await sleep(NETWORK_RETRY_WAIT_MS)
+        // 重试只花「省下来的那点时间」：快失败 + 完整 55 秒超时会顶爆 maxDuration=60
+        opts = {
+          ...o,
+          timeoutMs: Math.max(NETWORK_RETRY_MIN_TIMEOUT_MS, baseTimeoutMs - elapsed - NETWORK_RETRY_WAIT_MS),
+        }
+        attempt -= 1 // 这一次不算调用方的 retry
+      }
     }
   }
   return last

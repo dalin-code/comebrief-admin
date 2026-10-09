@@ -53,7 +53,10 @@ export async function POST(req: NextRequest) {
       // 思考 token 会抢 JSON 的额度，导致 JSON 被截断 —— 必须关
       thinkingBudget: 0,
     })
-    if (ai.ok === false) return jsonResponse({ error: ai.error }, ai.status)
+    if (ai.ok === false) {
+      console.log(`[ai-review:${reqId}] 模型调用失败`, { status: ai.status, error: ai.error })
+      return jsonResponse({ error: ai.error }, ai.status)
+    }
 
     const parsed = parseStoryReview(ai.text, ai.model)
     if (parsed.ok === false) {
