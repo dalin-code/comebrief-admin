@@ -42,7 +42,9 @@ function normalizeIssues(input: unknown): ReviewIssue[] {
 /**
  * ✨ 定向重写（P3 第三遍）—— 只改点名的那几处，别的逐字保留。
  *
- * 入参：{ html 或 text, title, excerpt, issues: ReviewIssue[], skill }
+ * 入参：{ html 或 text, title, excerpt, issues: ReviewIssue[], notes, skill }
+ *   issues = AI 自评的清单（勾选过的）；notes = 站长自己写的评价与想法。
+ *   两者至少给一个 —— 只有站长意见时，模型照样按他的意见定向改。
  * 出参：{ ok, data: { title, excerpt, html, chars, before, after, rewrites, warnings, model, ms } }
  *
  * 和第一遍同一套写作宪法（角色 + 写法 + 禁忌），所以改完不会换一种腔调。
@@ -59,12 +61,17 @@ export async function POST(req: NextRequest) {
     const text = String(body?.text || '').trim()
     const html = String(body?.html || '').trim()
     const bodyText = (text || htmlToPlainText(html) || '').trim()
+    // 站长自己写的评价与想法 —— 和勾选的清单一起当改稿依据（上限与前端 textarea 的 maxLength 对齐）
+    const notes = String(body?.notes || '').trim().slice(0, 800)
 
     if (bodyText.length < 80) return jsonResponse({ error: '正文太短了（至少 80 字才值得重写）' }, 400)
     if (bodyText.length > 12000) return jsonResponse({ error: '正文太长了，重写只适用于单篇短篇（12000 字以内）' }, 400)
 
     const issues = normalizeIssues(body?.issues)
-    if (!issues.length) return jsonResponse({ error: '没有要改的问题：先跑一次自评，或手动勾选要改的条目' }, 400)
+    // 只有站长意见、没勾任何条目也允许改 —— 「我自己看出来的问题，凭什么非得 AI 先点头」
+    if (!issues.length && !notes) {
+      return jsonResponse({ error: '没有要改的地方：先跑一次自评勾选条目，或在「你的评价与想法」里写几句' }, 400)
+    }
 
     const admin = getSupabaseAdminClient()
     if (!admin.ok) return jsonResponse({ error: admin.error }, 500)
@@ -74,7 +81,7 @@ export async function POST(req: NextRequest) {
     const ai = await callText({
       task: 'revise',
       system: buildRewriteSystemPrompt(chosen.row),
-      prompt: buildRewriteUserPrompt({ title, bodyText, excerpt, issues }),
+      prompt: buildRewriteUserPrompt({ title, bodyText, excerpt, issues, notes }),
       // 改稿要贴着原文走：温度比初稿低一档，太高会「顺手发挥」
       temperature: 0.6,
       maxOutputTokens: 8192,
@@ -110,6 +117,7 @@ export async function POST(req: NextRequest) {
       before: bodyText.length,
       after: chars,
       issues: issues.length,
+      notes: notes.length,
       dims: Array.from(new Set(issues.map((i) => i.dimension))).join(','),
       skill: chosen.row?.code || '(无)',
       model: ai.model,

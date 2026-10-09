@@ -105,6 +105,9 @@ export function StoryComposer({
   const [reviewSkill, setReviewSkill] = useState<{ code: string; name: string } | null>(null)
   const [reviewWarnings, setReviewWarnings] = useState<string[]>([])
   const [picked, setPicked] = useState<string[]>([])
+  // 站长自己写的评价与想法 —— 和 AI 的清单一起当改稿依据（见 handleRewrite）；
+  // 重写之后不清空：下一轮的诉求多半还是这几句，让他接着改。
+  const [reviewNotes, setReviewNotes] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [error, setError] = useState('')
   const [tipSide, setTipSide] = useState<'left' | 'right'>('left')
@@ -329,6 +332,7 @@ export function StoryComposer({
     setReview(null)
     setReviewSkill(null)
     setPicked([])
+    setReviewNotes('')
     try {
       const data = await apiPost('/api/ai/story', { combo: selection, idea, materials, length, skill: skillCode })
       const story: GeneratedStory = {
@@ -380,6 +384,7 @@ export function StoryComposer({
   /**
    * P3 第二遍：自评 —— 拿预览里的稿子换一份 6 维体检报告。
    * 只读不改：评审失败也不影响已经生成的稿子。
+   * 站长若已经写了自己的评价，也一并给模型 —— 他关心的位置必须被评到（打分锚点照旧）。
    */
   const handleReview = async () => {
     if (!preview) return
@@ -390,6 +395,7 @@ export function StoryComposer({
         title: preview.title,
         html: preview.html,
         length,
+        notes: reviewNotes.trim(),
         skill: skillCode,
       })
       const r = data?.review as StoryReview
@@ -407,12 +413,16 @@ export function StoryComposer({
     }
   }
 
-  /** P3 第三遍：定向重写 —— 只改勾选的那几处，其余逐字保留 */
+  /**
+   * P3 第三遍：定向重写 —— 只改「勾选的 AI 条目 + 站长自己写的意见」，其余逐字保留。
+   * 只有站长意见、一条 AI 条目都没勾也能改：他自己看出来的问题，凭什么非得 AI 先点头。
+   */
   const handleRewrite = async () => {
-    if (!preview || !review) return
-    const issues = review.issues.filter((i) => picked.includes(i.id))
-    if (!issues.length) {
-      showToast('先勾选要改的条目', 'error')
+    if (!preview) return
+    const notes = reviewNotes.trim()
+    const issues = (review?.issues || []).filter((i) => picked.includes(i.id))
+    if (!issues.length && !notes) {
+      showToast('先勾选要改的条目，或者在下面写几句你的想法', 'error')
       return
     }
     setBusy('rewrite')
@@ -423,6 +433,7 @@ export function StoryComposer({
         excerpt: preview.excerpt,
         html: preview.html,
         issues,
+        notes,
         skill: skillCode,
       })
       setPreview({
@@ -434,18 +445,28 @@ export function StoryComposer({
         skill: preview.skill,
       })
       // 改完这一版已经不是刚才被评的那一版：旧评分作废，也要重新「插入编辑器」
+      // （站长写的意见保留 —— 他多半就是拿这几句在反复磨）
       setReview(null)
       setReviewSkill(null)
       setReviewWarnings([])
       setPicked([])
       setApplied(false)
-      showToast(`已按 ${issues.length} 条改法重写：${data?.before ?? '?'} → ${data?.after ?? '?'} 字`, 'success')
+      const basis = [issues.length ? `${issues.length} 条清单` : '', notes ? '你的意见' : ''].filter(Boolean).join(' + ')
+      showToast(`已按${basis}重写：${data?.before ?? '?'} → ${data?.after ?? '?'} 字`, 'success')
     } catch (e: any) {
       setError(e?.message || '重写失败（原稿没有动）')
     } finally {
       setBusy('idle')
     }
   }
+
+  /** 重写按钮上的字：改稿依据有几份（AI 清单 / 站长意见），按钮就说几份 */
+  const rewriteLabel = (() => {
+    const hasNotes = !!reviewNotes.trim()
+    if (picked.length && hasNotes) return `按 ${picked.length} 条 + 你的意见重写`
+    if (picked.length) return `按勾选的 ${picked.length} 条重写`
+    return hasNotes ? '按你的意见重写' : '勾选条目，或写下你的意见'
+  })()
 
   const togglePicked = (id: string) =>
     setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
@@ -905,7 +926,7 @@ export function StoryComposer({
 
                     {review.issues.length === 0 ? (
                       <p className="text-[10px] font-bold text-emerald-600 text-left">
-                        这一版没挑出问题 —— 可以直接插入编辑器了。
+                        这一版没挑出问题 —— 可以直接插入编辑器了。你还有想法的话，写在下面的框里，AI 会照着改。
                       </p>
                     ) : (
                       <>
@@ -946,24 +967,49 @@ export function StoryComposer({
                             </span>
                           </label>
                         ))}
-
-                        <button
-                          type="button"
-                          onClick={handleRewrite}
-                          disabled={busy !== 'idle' || picked.length === 0}
-                          title="只改勾选的这几处，其余逐字保留"
-                          className="w-full h-12 rounded-2xl bg-indigo-600 text-white text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-                        >
-                          {busy === 'rewrite' ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
-                          {busy === 'rewrite' ? '正在重写…' : `按勾选的 ${picked.length} 条重写`}
-                        </button>
-                        <p className="text-[9px] font-bold text-slate-300 text-left">
-                          重写只改点名的地方，没点到的句子逐字保留；改完要重新「插入编辑器」。
-                        </p>
                       </>
                     )}
                   </div>
                 )}
+
+                {/* ---- 你的评价与想法：和 AI 的报告合起来，才叫「我和 AI 一起评的」 ---- */}
+                <div className="pt-3 border-t border-slate-200/80 space-y-2.5">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left block">
+                    你的评价与想法
+                    <span className="ml-2 font-bold tracking-normal normal-case text-slate-300">
+                      可留空 —— 写了就按你说的改
+                    </span>
+                  </label>
+                  {/* 上限跟 /api/ai/story/{rewrite,review} 里的 slice(0, 800) 对齐 */}
+                  <textarea
+                    value={reviewNotes}
+                    onChange={(e) => setReviewNotes(e.target.value)}
+                    rows={3}
+                    maxLength={800}
+                    placeholder="例如：结尾收得太满，想停在一个画面上；第三段那个比喻太老套；主角的口吻再冷一点。"
+                    className="w-full p-5 bg-white rounded-3xl border border-slate-200 outline-none text-[13px] font-medium leading-relaxed resize-none focus:border-indigo-200 transition-all"
+                  />
+                  <p className="text-[9px] font-bold text-slate-300 leading-relaxed text-left">
+                    {reviewNotes.trim()
+                      ? `已写 ${reviewNotes.trim().length} 字：会和 AI 的清单一起交给改稿那一遍，你点的位置优先改。`
+                      : '写在这里的话会和 AI 的清单一起交给改稿那一遍；只有你的意见、不跑自评也能改。'}
+                    {review ? ' 点「重新自评」，AI 还会在报告里正面回你的判断。' : ''}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleRewrite}
+                  disabled={busy !== 'idle' || (!picked.length && !reviewNotes.trim())}
+                  title="只改勾选的条目和你写的意见，其余逐字保留"
+                  className="w-full h-12 rounded-2xl bg-indigo-600 text-white text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                >
+                  {busy === 'rewrite' ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
+                  {busy === 'rewrite' ? '正在重写…' : rewriteLabel}
+                </button>
+                <p className="text-[9px] font-bold text-slate-300 text-left">
+                  重写只改点名的地方，没点到的句子逐字保留；改完要重新「插入编辑器」。
+                </p>
               </div>
 
             </div>

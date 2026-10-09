@@ -307,9 +307,15 @@ export function buildReviewSystemPrompt(skill?: StorySkill | null) {
   return parts.join('\n')
 }
 
-/** 评审的 user 提示词：本篇正文（要原文，不要摘要、不要 HTML 标签） */
-export function buildReviewUserPrompt(input: { title: string; bodyText: string; targetLength?: number }) {
-  const { title, bodyText, targetLength } = input
+/** 评审的 user 提示词：本篇正文（要原文，不要摘要、不要 HTML 标签）*/
+export function buildReviewUserPrompt(input: {
+  title: string
+  bodyText: string
+  targetLength?: number
+  /** 站长自己写的评价与想法（可留空）—— 只当线索，不许因为他说了就跟着改分 */
+  notes?: string
+}) {
+  const { title, bodyText, targetLength, notes } = input
   const body = String(bodyText || '').trim()
   const parts: string[] = []
   if (title.trim()) parts.push(`【标题】${title.trim().slice(0, 60)}`, '')
@@ -317,6 +323,21 @@ export function buildReviewUserPrompt(input: { title: string; bodyText: string; 
     parts.push(`【目标篇幅】约 ${targetLength} 字（现在 ${body.length} 字；偏短本身不算问题，别只按字数给分）`, '')
   }
   parts.push('【正文（逐字评审，evidence 必须从这里照抄）】', body.slice(0, 8000))
+  const own = String(notes || '').trim()
+  if (own) {
+    // 把站长的话喂进来，是为了让他关心的位置**一定被评到**（他提了却没回音，等于没评）；
+    // 但打分锚点必须照旧 —— 否则「我和 AI 一起评」会退化成「AI 顺着我说」。
+    parts.push(
+      '',
+      '【站长自己的判断（他关心的地方必须评到，但别顺着他说）】',
+      own.slice(0, 800),
+      '',
+      '处理他的判断的规矩：',
+      '1. 他点到的地方，必须给一条 issue：若你也认为有问题，就照常给证据和改法；若你判断没问题，也要照抄原文当 evidence，在 problem 里说清你的看法（他可以自己决定要不要改）。',
+      '2. 打分锚点不变：不许因为他提了就跟着扣分，也不许加分。',
+      '3. 他没提到但确实该改的地方，照常列出来。'
+    )
+  }
   return parts.join('\n')
 }
 

@@ -11,7 +11,8 @@ export const maxDuration = 60
 /**
  * ✨ AI 自评（P3 第二遍）—— 拿草稿换一份 6 维体检报告（JSON）。
  *
- * 入参：{ html 或 text, title, length, skill }
+ * 入参：{ html 或 text, title, length, notes, skill }
+ *   notes = 站长自己写的评价与想法（可留空）：他关心的位置必须被评到，但打分锚点照旧。
  * 出参：{ ok, data: { review, skill, warnings, model, ms } }
  *
  * 这一层**绝不改稿**，也不阻塞出稿：评审失败只回报错误，草稿原样留在前端。
@@ -29,6 +30,8 @@ export async function POST(req: NextRequest) {
     const html = String(body?.html || '').trim()
     const bodyText = (text || htmlToPlainText(html) || '').trim()
     const targetLength = Number(body?.length) || 0
+    // 站长自己写的评价与想法 —— 让 AI 在报告里正面回应他关心的位置（打分锚点不变）
+    const notes = String(body?.notes || '').trim().slice(0, 800)
 
     if (bodyText.length < 80) return jsonResponse({ error: '正文太短了（至少 80 字才值得评审）' }, 400)
     if (bodyText.length > 12000) return jsonResponse({ error: '正文太长了，自评只适用于单篇短篇（12000 字以内）' }, 400)
@@ -42,7 +45,7 @@ export async function POST(req: NextRequest) {
     const ai = await callText({
       task: 'revise',
       system: buildReviewSystemPrompt(chosen.row),
-      prompt: buildReviewUserPrompt({ title, bodyText, targetLength }),
+      prompt: buildReviewUserPrompt({ title, bodyText, targetLength, notes }),
       // 审稿要稳：温度压低，别让它发挥创意
       temperature: 0.2,
       jsonMode: true,
@@ -73,6 +76,7 @@ export async function POST(req: NextRequest) {
       total: review.total,
       issues: review.issues.length,
       chars: bodyText.length,
+      notes: notes.length,
       skill: chosen.row?.code || '(无)',
       model: ai.model,
       ms: ai.ms,
