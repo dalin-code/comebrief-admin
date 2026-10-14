@@ -24,6 +24,93 @@ export const stripFences = (text: string) =>
     .replace(/\r?\n?```\s*$/, '')
     .trim()
 
+/* ---------------- 模型「数数残渣」的识别与清理 ---------------- */
+
+/**
+ * 括号编号标记：`(101)`、`（99）`。
+ *
+ * 这是 Gemini 3.x 开着思考时的一种真实故障：它会一边写摘要一边**一个汉字一个汉字地数**
+ * （因为提示词里规定了「不超过 120 字」，它就想核对字数），数数的过程写进了正式输出，
+ * 于是摘要栏里出现 `99)经(100)蜕(101)变(102)的…` 这种鬼东西。
+ * 更糟的是思考 token 和答案共用 maxOutputTokens，思考吃掉 980/1024 之后
+ * finishReason 变成 MAX_TOKENS，那串数数记录还会被截掉前半截 —— 站长看到的「摘要」
+ * 就是半截乱码。根治办法是关掉思考（thinkingConfig.thinkingBudget = 0），
+ * 下面两个函数是兜底：认出来就别写进栏目，宁可报错重试。
+ */
+const COUNT_MARK = /[（(]\s*\d{1,4}\s*[)）]/g
+
+/** 整段就是数数残渣吗（`(101)接(102)与…` 这种标记又密又多） */
+export function isCountLeak(text: string) {
+  const s = String(text || '')
+  const marks = s.match(COUNT_MARK) || []
+  // 少于 3 个标记的不算 —— 正常摘要里出现一个 `(2024)` 是合理的
+  if (marks.length < 3) return false
+  const plain = s.replace(/\s/g, '')
+  if (!plain) return false
+  return marks.length / plain.length > 0.12
+}
+
+/**
+ * 把数数残渣从模型输出里剔掉。
+ *   ① 整段都是残渣 → 返回空串（调用方应该报「请重试」，而不是把乱码写进栏目）
+ *   ② 好句子后面拖了一串（`…拉开序幕。 Count: 那(`）→ 只留下前面那句
+ */
+export function stripCountLeak(text: string) {
+  const s = String(text || '').trim()
+  if (!s) return ''
+  if (isCountLeak(s)) return ''
+  // 「Count:」「字数：」这类标签后面跟的一定是草稿，从标签处砍掉
+  const labeled = s.split(/\s*(?:Count|字符数|字数|计数)\s*[:：]/i)[0].trim()
+  const marks = [...labeled.matchAll(COUNT_MARK)]
+  if (marks.length >= 3) return labeled.slice(0, marks[0].index ?? 0).trim()
+  return labeled
+}
+
+/**
+ * 「这段看着是不是中文正文」。
+ *
+ * 用来兜住「页签错位」这种人为失误：编辑页默认停在英文页签，有人直接往里粘中文，
+ * 于是英文栏里躺着中文、中文原稿那一栏是空的。这时候要是照着「英文摘要」去问模型，
+ * 它会顺着正文语言吐一段中文回来（英文栏里挂一段中文，前台直接难看）；
+ * 翻译那边也会因为读不到中文原稿而误报「中文正文太短了」。
+ * 默认要求至少 minChars 个字符，免得把一句中文台词当成整篇原稿。
+ */
+export function isMostlyChinese(text: string, minChars = 80) {
+  const plain = String(text || '').replace(/\s/g, '')
+  if (plain.length < minChars) return false
+  return countChineseChars(plain) / plain.length >= 0.3
+}
+
+/**
+ * 挑出「中文原稿」那一份正文。
+ *
+ * 编辑页新建稿默认停在英文页签（lang 初值是 'en'），有人会直接往那边粘中文；
+ * 老稿子的 content_zh_html 也可能是空的（线上抽查 20 篇有 19 篇是空的）。
+ * 这两种情况下「正经位置」都是空串，翻译就会误报「中文正文太短了」——
+ * 明明编辑器里躺着一整篇中文。
+ *
+ * 所以：official（正经位置）看着是中文就用它；否则去 others 里找第一份看着是中文的，
+ * 并回报 recovered = true —— 调用方要负责把它写回 ref / 编辑器，不然保存时
+ * 它会被当成英文版写进 content_html，中文那一栏永远是空的。
+ */
+export function pickChineseOriginal(opts: {
+  /** 正经位置：停在中文页签时是编辑器正文，否则是暂存的 ref */
+  official: string
+  /** 另一边：停在中文页签时是暂存的英文 ref，否则先看编辑器再看英文 ref */
+  others?: string[]
+  /** 多少字才算「一篇原稿」而不是一句台词 */
+  minChars?: number
+}): { html: string; recovered: boolean } {
+  const min = opts.minChars ?? 80
+  const official = String(opts.official || '')
+  if (isMostlyChinese(htmlToPlainText(official), min)) return { html: official, recovered: false }
+  for (const other of opts.others || []) {
+    const html = String(other || '')
+    if (isMostlyChinese(htmlToPlainText(html), min)) return { html, recovered: true }
+  }
+  return { html: official, recovered: false }
+}
+
 /** HTML 正文 → 纯文本（翻译、摘要、字数统计都要先看纯文本） */
 export const htmlToPlainText = (html: string) =>
   String(html || '')
@@ -94,6 +181,42 @@ const FORBIDDEN = [
   '不许出现「本文」「这个故事告诉我们」这类旁白',
 ]
 
+/**
+ * 默认世界设定：欧美背景。
+ *
+ * 站长 2026-10 的要求：人物、地名、生活场景一律以欧美国家为主，不要主动塞中国元素，
+ * 除非他在【本篇构思】或【素材】里明确点名要中国背景。这里只写"默认值"，
+ * 并且把优先级写死在最后一行 —— 站长的要求永远压过这一整段。
+ *
+ * 放在 system（buildStorySystemPrompt）里：它每次生成都一模一样，能稳定命中提示缓存。
+ */
+export const DEFAULT_WORLD_BRIEF = [
+  '【世界设定（默认值）】',
+  '- 故事默认发生在欧美世界：美国、英国、爱尔兰、加拿大、澳大利亚，或欧洲的城市与小镇。用当地的地名、季节、街景、职业。',
+  '- 人物用西方名字，中文里按音译写：Noah Bennett → 诺亚·班尼特，Grace O’Connell → 格蕾丝·奥康奈尔。',
+  '- 地名同样音译：Portland → 波特兰，Brighton → 布莱顿，the Lake District → 湖区。',
+  '- 生活细节也用欧美的：超市、加油站、教堂、地铁、感恩节或圣诞节、美元英镑欧元、英里与华氏度。',
+  '- 不要主动写中国元素：中式姓名、中式称谓（老王、张姨）、中式节日（春节、中秋）、中式饮食与计量（斤、两、人民币）、中国地名。',
+  '- 例外：站长的【本篇构思】或【素材】里明确要求中国（或其他国家）背景时，一切以站长的要求为准。',
+  '',
+  '【优先级】站长的构思 > 站长的素材（情节主干照它写）> 本默认设定 > 你自己的自由发挥。',
+].join('\n')
+
+/**
+ * 对抗同质化 —— 这几条是"每次生成都要重新做一遍"的硬要求。
+ *
+ * 为什么需要它：模型写短篇有极强的路径依赖，同一个标签组合连写几次，
+ * 出来的往往是"同一个故事的换皮版"（同样的万能开场、同样的独居主角、同样的雨夜）。
+ * 把这些最常撞的套路直接写成禁令，比事后让站长一篇篇去改便宜得多。
+ */
+const ANTI_REPETITION = [
+  '动笔前先定一个"这一篇独有"的具体画面（一个能被拍下来的瞬间），再开始写；不要从"一个普通的早晨""闹钟响了"这类万能开场滑进去。',
+  '主角的年龄、职业、住处、当天的天气，每一篇都要换，不许沿用上一篇的配置 —— 但站长的【本篇构思】或【参考素材】已经指定的，照其指定，不许改。',
+  '不要用这些开场：闹钟响起、雨夜里的电话、镜子里的自己、翻开旧照片、多年以后、深夜的便利店（改编底本里就是这么开场的除外）。',
+  '标题要落在一个具体的物件或动作上，不要用「孤独 / 城市 / 时间 / 记忆 / 光」这类抽象词。',
+  '冲突必须来自主角当下正在做的一件具体的小事（一个动作、一句对话、一件要交出去的东西），不要靠回忆或旁白交代前史。',
+]
+
 const OUTPUT_SPEC = [
   '【输出格式（严格照办，不要输出任何多余内容）】',
   '<<<TITLE>>>',
@@ -127,8 +250,11 @@ function buildStoryRules() {
     '【写作要求】',
     `- 直接开始讲故事。不要写标题、不要写「以下是」、不要解释、不要在结尾总结。`,
     '- 用具体的动作、对话、物件推进剧情；形容词能省就省。',
-    '- 人名、地名要具体（例如「林晚」「城西老小区」），不要用「小明」「某地」这类占位词。',
+    '- 人名、地名要具体（例如「诺亚·班尼特」「波特兰的老码头」），不要用「小明」「某地」这类占位词。',
     '- 使用中文全角标点。对话用「」或「」，全文统一。',
+    '',
+    '【对抗同质化（每次生成都要重新做一遍，不许偷懒沿用上一篇的配置）】',
+    ...ANTI_REPETITION.map((x) => `- ${x}`),
     '',
     '【禁忌清单（出现任何一条都算失败）】',
     ...FORBIDDEN.map((x) => `- ${x}`),
@@ -137,6 +263,31 @@ function buildStoryRules() {
   ].join('\n')
 }
 
+/**
+ * 「参考素材」= 改编底本（不是「只取细节的参考资料」）。
+ *
+ * 站长 2026-10 的原话：面板上的【参考素材】是他手写的原始故事 / 梗概，
+ * 他要的是**以这份内容为主线情节**改编 —— AI 只补细节、场景衔接和缺失的铺垫，
+ * 不许天马行空另写一篇（「不管给什么参考，写的故事基本上都是一个」就是这么来的）。
+ *
+ * 以前的措辞是「可参考的素材（用来获取细节和真实感，不要照抄句子）」，
+ * 等于把一整篇梗概降级成了氛围素材，模型当然会自己另编一个故事。改成「改编底本」之后，
+ * 下面这份措辞还要同时顶掉提示词里另外三处会「抢戏」的指令：
+ *   · ANTI_REPETITION 的「主角配置每篇都要换」→ 素材定了就照素材（见上面那条限定语）；
+ *   · avoidTitles 的「必须和往期明显不同」→ 只在素材没写到的部分生效；
+ *   · DEFAULT_WORLD_BRIEF 的默认欧美背景 → 构思 / 素材点了名的以它们为准。
+ * 最后再用一段「冲突时的优先级」收口，模型才不会各条指令各信一半。
+ */
+const ADAPT_MATERIAL_HEADER = '【改编底本（这是这一篇的情节主干，必须照它写）】'
+
+const ADAPT_MATERIAL_RULES = [
+  '下面这段是站长给的原始故事 / 梗概。你要做的是把它改编成一篇符合上面标签设定的中文短篇：',
+  '- 主要人物及其关系、关键事件与因果、真相与反转、结局方向 —— 一律照它来。不许另起一个故事，不许把它的核心场景换掉。',
+  '- 它没写到的部分（怎么开场、对话、动作、细节、过渡）由你补足；补的内容必须与它一致，不能引入与它冲突的新情节。',
+  '- 可以按上面的【题材 / 时代 / 视角 / 风格】调整人名、地名、人称与文风。',
+  '- 句子用你自己的写法重写，不要整段照抄下面的原文。',
+].join('\n')
+
 /** 「标签设定 + 构思 + 素材 + 篇幅」—— 每篇都不一样，放 user；且放在最后，模型记得最牢 */
 function buildStorySetting(input: {
   combo: StoryCombo
@@ -144,8 +295,16 @@ function buildStorySetting(input: {
   idea: string
   materials: string
   length: number
+  /**
+   * 最近已经写过的几篇（标题）。
+   * 站长的原话是"文章同质化严重" —— 把上一篇的标题贴回给模型，是最省事也最有效的去重手段：
+   * 它自己就能看出"哦，又写了一个雨夜 + 独居主角"，从而换一条路走。
+   * 不传 / 传空数组时，这一段完全不出现（P0 盲测脚本要的"前后逐字节一致"靠这个保住）。
+   */
+  avoidTitles?: string[]
 }) {
   const { tagsByDimension, idea, materials, length } = input
+  const avoidTitles = (input.avoidTitles || []).map((t) => String(t || '').trim()).filter(Boolean).slice(0, 16)
   const lengthMin = Math.max(200, Math.round(length * 0.9))
   const lengthMax = Math.round(length * 1.15)
 
@@ -157,18 +316,44 @@ function buildStorySetting(input: {
     settingBlocks.push(`【${dim.cn} ${dim.label}】${names}\n${renderTags(picked)}`)
   }
 
+  const material = materials.trim().slice(0, 4000)
+  const hasMaterial = !!material
+
   const parts = [
     settingBlocks.length ? settingBlocks.join('\n\n') : '（本次没有指定维度，请你自行判断最合适的写法。）',
     '',
-    '【本篇构思（必须围绕它写，不要跑题）】',
-    idea.trim() || '（没有额外构思：请围绕上面选定的题材自行设计一个具体、可信、有画面的故事。）',
+    '【本篇构思（站长的总体要求，优先于改编底本）】',
+    idea.trim() ||
+      (hasMaterial
+        ? '（没有额外构思：围绕下面的改编底本写，不要自己另想一个故事。）'
+        : '（没有额外构思：请围绕上面选定的题材自行设计一个具体、可信、有画面的故事。）'),
   ]
 
-  if (materials.trim()) {
+  // 有素材 = 有情节主干。它紧跟构思、又在「对抗同质化 / 往期标题」之前，
+  // 后面再补一段「冲突时的优先级」收口，模型才不会一边照素材、一边又去换主角。
+  if (hasMaterial) parts.push('', ADAPT_MATERIAL_HEADER, ADAPT_MATERIAL_RULES, material)
+
+  if (avoidTitles.length) {
+    const titles = [
+      '【最近已经写过的（这一篇必须和它们明显不同）】',
+      avoidTitles.map((t) => `《${t}》`).join('、'),
+      '请换一套开场方式、一个不同的主角配置（年龄 / 职业 / 住处）、一个不同的季节与地点，',
+      '也不要重复上面这些故事里的核心物件与冲突。如果上面没有列出构思，就自己另想一个。',
+    ]
+    if (hasMaterial) {
+      titles.push(
+        '（有改编底本时，这一条只在素材没写到的部分生效 —— 不许为了「和往期不同」改掉素材里的开场、主角或核心冲突。）'
+      )
+    }
+    parts.push('', ...titles)
+  }
+
+  if (hasMaterial) {
     parts.push(
       '',
-      '【可参考的素材（用来获取细节和真实感，不要照抄句子）】',
-      materials.trim().slice(0, 4000)
+      '【冲突时的优先级】站长的构思 > 改编底本的情节主干 > 默认世界设定 > 标签以外的自由发挥。',
+      '素材已经定好的开场方式、主角配置、核心物件与冲突，一律照用，',
+      '不许为了「和往期不一样」或「写得更漂亮」把它们换掉。'
     )
   }
 
@@ -235,30 +420,34 @@ export function buildSkillBlock(skill: StorySkill) {
 
 /**
  * system 提示词：稳定不变的那一半。
- * 顺序是「角色 → 写法（含范文）→ 写作要求与禁忌 → 输出格式」。
+ * 顺序是「角色 → 写法（含范文）→ 世界设定 → 对抗同质化 + 写作要求与禁忌 → 输出格式」。
  * 每一段都不随请求变化，所以能稳定命中提示缓存 —— 别往里面塞随请求变的东西。
  */
 export function buildStorySystemPrompt(skill?: StorySkill | null) {
   const parts: string[] = [STORY_ROLE]
   if (skill) parts.push('', buildSkillBlock(skill))
+  parts.push('', DEFAULT_WORLD_BRIEF)
   parts.push('', buildStoryRules())
   return parts.join('\n')
 }
 
-/** user 提示词：这一篇专属的那一半（标签 + 构思 + 素材 + 篇幅） */
+/** user 提示词：这一篇专属的那一半（标签 + 构思 + 素材 + 不要撞的往期标题 + 篇幅） */
 export function buildStoryUserPrompt(input: {
   combo: StoryCombo
   tagsByDimension: Partial<Record<DimensionKey, StoryTag[]>>
   idea: string
   materials: string
   length: number
+  /** 最近写过的标题 —— 用来把新一篇和旧的拉开距离，见 buildStorySetting */
+  avoidTitles?: string[]
 }) {
   return buildStorySetting(input)
 }
 
 /**
  * 兼容函数：把两半拼成「一整段」。
- * 拼接顺序与拆分前逐字节一致 —— P0 盲测脚本靠它保证多次运行用的是同一份提示词。
+ * 拼接顺序与 buildStorySystemPrompt + buildStoryUserPrompt 保持一致（system 在前、user 在后），
+ * 这样 P0 盲测脚本拿它当"线上提示词"的样本来核对时不会失真。
  */
 export function buildStoryPrompt(input: {
   combo: StoryCombo
@@ -268,9 +457,12 @@ export function buildStoryPrompt(input: {
   length: number
   /** 选了写法就把范文一起给模型；不传则与拆分前的提示词逐字节一致 */
   skill?: StorySkill | null
+  /** 最近写过的标题（可选）；不传时这一段不出现 */
+  avoidTitles?: string[]
 }) {
   const parts: string[] = [STORY_ROLE, '']
   if (input.skill) parts.push(buildSkillBlock(input.skill), '')
+  parts.push(DEFAULT_WORLD_BRIEF, '')
   parts.push(buildStorySetting(input), '', buildStoryRules())
   return parts.join('\n')
 }
@@ -313,7 +505,8 @@ export function buildTranslatePrompt(input: {
     '3. 句子顺序可以重组；中文成语、俗语不要直译，换成英语读者熟悉的说法。',
     '4. 中文的「留白」用英语的短句、停顿、留白来还原，不要补充说明。',
     '5. 保持原文的语气与节奏：原文快就快，原文慢就慢，原文冷就冷。',
-    '6. 人名可以保留拼音（如 Lin Wan），也可以换成自然的英文名；全篇统一。',
+    '6. 人名、地名一律还原成自然的英文写法（「诺亚·班尼特」→ Noah Bennett，「波特兰」→ Portland），',
+    '   全篇统一 —— 同一个人从头到尾只能有一个英文写法。原文若是拼音名（Lin Wan），保留拼音即可。',
     '',
     `【篇幅】English, ${wordsMin}–${wordsMax} words（对应中文约 ${zhLength} 字）。`,
     '',
@@ -338,6 +531,8 @@ export function buildTranslatePrompt(input: {
     '(The English story body. Use <p> for paragraphs, <h3> for a section heading if needed, <strong> for emphasis, <blockquote> for quoted passages.)',
   ].join('\n')
 }
+
+/* 分批翻译的常量与提示词见本文件末尾的「分批翻译」一节 */
 
 /** 生成摘要 —— 跟随当前语言页签：中文页签生成中文摘要，英文页签生成英文摘要 */
 export function buildExcerptPrompt(input: {
@@ -381,7 +576,7 @@ export function buildExcerptPrompt(input: {
  * 输出解析与清洗
  * ============================================================ */
 
-const SECTION_KEYS = ['TITLE', 'EXCERPT', 'BODY'] as const
+const SECTION_KEYS = ['TITLE', 'EXCERPT', 'GLOSSARY', 'BODY'] as const
 
 /** 取 `<<<KEY>>>` 到下一个分隔符之间的内容 */
 function pickSection(text: string, key: string) {
@@ -394,21 +589,26 @@ function pickSection(text: string, key: string) {
 }
 
 /**
- * 解析三段式输出。
+ * 解析三段（分批翻译时是四段）式输出。
  * 正文用「BODY 之后全部内容」兜底，这样即使模型把 EXCERPT 落下了也不会吃掉正文。
  * 完全没写分隔符时 → 整段当成正文，标题由调用处兜底。
+ *
+ * GLOSSARY 只在"分批翻译"的第一段出现：它是人名/地名对照表，要喂给后面几段，
+ * 好让第 3 段里的同一个角色和第 1 段拼得上一模一样。它必须排在 BODY 之前
+ * ——正文取的是「BODY 之后全部」，排在后面会被一起吞掉。
  */
-export function parseDelimitedStory(raw: string): { title: string; excerpt: string; body: string } {
+export function parseDelimitedStory(raw: string): { title: string; excerpt: string; glossary: string; body: string } {
   const text = stripFences(String(raw || ''))
   if (!SECTION_KEYS.some((k) => text.includes(`<<<${k}>>>`))) {
-    return { title: '', excerpt: '', body: text }
+    return { title: '', excerpt: '', glossary: '', body: text }
   }
   const bodyMarker = text.indexOf('<<<BODY>>>')
   const head = bodyMarker === -1 ? text : text.slice(0, bodyMarker)
   const body = bodyMarker === -1 ? '' : text.slice(bodyMarker + '<<<BODY>>>'.length).trim()
   const title = pickSection(head, 'TITLE')
   const excerpt = pickSection(head, 'EXCERPT')
-  return { title, excerpt, body: body || pickSection(text, 'EXCERPT') }
+  const glossary = pickSection(head, 'GLOSSARY')
+  return { title, excerpt, glossary, body: body || pickSection(text, 'EXCERPT') }
 }
 
 const ALLOWED_TAGS = new Set(['p', 'h2', 'h3', 'blockquote', 'strong', 'em', 'ul', 'ol', 'li', 'br', 'hr'])
@@ -535,14 +735,17 @@ function buildContinueRules() {
 
 const CONTINUE_ROLE = '你正在写一篇中文短篇故事，但上一段写得太短就收尾了。请从断掉的地方接着写完。'
 
-/** 续写的「设定 + 构思 + 还差多少字 + 上文尾巴」—— 每次都变，放 user */
+/** 续写的「设定 + 构思 + 素材 + 还差多少字 + 上文尾巴」—— 每次都变，放 user */
 function buildContinueBrief(input: {
   tagsByDimension: Partial<Record<DimensionKey, StoryTag[]>>
   idea: string
+  /** 参考素材 = 改编底本；续写也得带着，否则「接着写下去」会把故事带回模型默认的那一套 */
+  materials?: string
   tailText: string
   remainingWords: number
 }) {
   const { tagsByDimension, idea, tailText, remainingWords } = input
+  const material = String(input.materials || '').trim().slice(0, 4000)
   const settings = DIMENSIONS.filter((d) => (tagsByDimension[d.key] || []).length)
     .map((d) => {
       const picked = tagsByDimension[d.key] || []
@@ -550,36 +753,54 @@ function buildContinueBrief(input: {
     })
     .join('\n')
 
-  return [
+  const parts = [
     '【这篇的设定（保持不变）】',
     settings || '（保持与上文一致）',
     '',
     '【本篇构思】',
     idea.trim() || '（保持与上文一致）',
+  ]
+
+  if (material) {
+    parts.push(
+      '',
+      '【改编底本（续写不许偏离它的情节）】',
+      '接着写的那部分，仍然要沿着这份底本的情节主干往前推：素材里还没讲到的接着讲，已经讲过的不要再讲一遍。',
+      material
+    )
+  }
+
+  parts.push(
     '',
     `【还要补】${Math.max(200, remainingWords)} 字左右，把故事真正讲完整。`,
     '',
     '【上文最后一段（供你接续，不要重复输出它）】',
-    tailText.slice(-1200),
-  ].join('\n')
+    tailText.slice(-1200)
+  )
+
+  return parts.join('\n')
 }
 
 /**
- * 续写的 system 提示词（角色 + 写法 + 铁律 + 输出格式）
+ * 续写的 system 提示词（角色 + 写法 + 世界设定 + 铁律 + 输出格式）
  * 写法要一并带上：续写必须和前半篇是同一支笔，
  * 否则「接着写下去」会把腔调拉回模型默认的那股 AI 味 —— 前面白写。
+ * 世界设定也要带上：续写的后半篇不能突然从波特兰跳回中国小城。
  */
 export function buildContinueSystemPrompt(skill?: StorySkill | null) {
   const parts: string[] = [CONTINUE_ROLE]
   if (skill) parts.push('', buildSkillBlock(skill))
+  parts.push('', DEFAULT_WORLD_BRIEF)
   parts.push('', buildContinueRules())
   return parts.join('\n')
 }
 
-/** 续写的 user 提示词（设定 + 构思 + 还差多少 + 上文尾巴） */
+/** 续写的 user 提示词（设定 + 构思 + 素材 + 还差多少 + 上文尾巴） */
 export function buildContinueUserPrompt(input: {
   tagsByDimension: Partial<Record<DimensionKey, StoryTag[]>>
   idea: string
+  /** 参考素材 = 改编底本（可选；不传则与旧版逐字节一致） */
+  materials?: string
   tailText: string
   remainingWords: number
 }) {
@@ -590,6 +811,7 @@ export function buildContinueUserPrompt(input: {
 export function buildContinuePrompt(input: {
   tagsByDimension: Partial<Record<DimensionKey, StoryTag[]>>
   idea: string
+  materials?: string
   tailText: string
   remainingWords: number
 }) {
@@ -597,4 +819,178 @@ export function buildContinuePrompt(input: {
 }
 
 
+
+
+/* ============================================================
+ * 分批翻译（长文章中译英）
+ *
+ * 背景：一篇 3000 字的中文，英文要 2000 词左右。整篇一次性翻会同时撞上
+ * 「模型单次输出上限」和「路由 60 秒超时」两道墙 —— 站长的体感就是
+ * 「文章一长就翻译不了」。改成切块轮流翻，每块单独一次请求，长文也能翻完。
+ *
+ * 分工：
+ *   切块（splitTranslationChunks）放在客户端 —— 编辑器那边先知道一共几块，
+ *   才能显示「正在翻译 2/5」，也才能一块失败只重试那一块。
+ *   服务端只负责翻它收到的那一块（buildTranslateChunkPrompt）。
+ * ============================================================ */
+
+/** 一次翻译多少汉字。900 字中文约 600 词英文，单次请求稳稳落在一分钟预算里。 */
+export const TRANSLATE_CHUNK_CHARS = 900
+
+/**
+ * 中文正文 → 分批翻译用的段块（纯函数、确定性：同样的输入永远得到同样的切法）。
+ *
+ * 原则：
+ *   1. 先按段落切 —— 正文是 <p> 出来的，htmlToPlainText 会把每一段化成一行。
+ *      尽量不把一个段落劈开，劈开容易让模型的语气在中途断掉。
+ *   2. 段落本身超过上限时，再按句号 / 问号 / 叹号切；单句还超长才硬切。
+ *   3. 最后贪心装箱：能塞进当前一块就塞，塞不下就开新的一块。
+ */
+export function splitTranslationChunks(text: string, maxChars = TRANSLATE_CHUNK_CHARS): string[] {
+  const clean = String(text || '').replace(/\r\n?/g, '\n').trim()
+  if (!clean) return ['']
+  const limit = Math.max(200, Math.floor(maxChars) || TRANSLATE_CHUNK_CHARS)
+
+  const paragraphs = clean
+    .split(/\n\s*\n|\n/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+
+  const units: string[] = []
+  for (const paragraph of paragraphs) {
+    if (paragraph.length <= limit) {
+      units.push(paragraph)
+      continue
+    }
+    for (const sentence of paragraph.split(/(?<=[。！？；…!?;])/)) {
+      const piece = sentence.trim()
+      if (!piece) continue
+      if (piece.length <= limit) {
+        units.push(piece)
+        continue
+      }
+      for (let i = 0; i < piece.length; i += limit) units.push(piece.slice(i, i + limit))
+    }
+  }
+
+  const chunks: string[] = []
+  let cur = ''
+  for (const unit of units) {
+    if (cur && cur.length + unit.length + 1 > limit) {
+      chunks.push(cur)
+      cur = ''
+    }
+    cur = cur ? `${cur}\n${unit}` : unit
+  }
+  if (cur) chunks.push(cur)
+  return chunks.length ? chunks : [clean]
+}
+
+
+/**
+ * 分批翻译时「第 k 段」的提示词。
+ *
+ * 分段翻译真正的难点是**前后对不上**：人名一会儿 Noah 一会儿 Noah Bennett、
+ * 第 3 段又把故事重新开了个头、语气突然变了。所以这里比整篇翻译多给三样东西：
+ *   glossary 名词对照表（第 1 段产出，后面每段都带着，人名地名不可能走样）
+ *   prevTail 上一段英文的尾巴（让它从断掉的地方接上，而不是自己另起一段）
+ *   位置说明 这是第几段 / 共几段（不是开头就别写开头，不是结尾就别急着收尾）
+ *
+ * 输出格式也跟着变：只有第 1 段输出 TITLE / EXCERPT / GLOSSARY，
+ * 其余段只输出 BODY —— 少让模型说废话，也少给它跑偏的机会。
+ */
+export function buildTranslateChunkPrompt(input: {
+  /** 第几段（1 起） */
+  part: number
+  /** 一共几段 */
+  parts: number
+  /** 这一段的中文原文 */
+  zhText: string
+  /** 全文中文（只有第 1 段需要：用来写标题、摘要和名词对照表） */
+  zhFullText?: string
+  zhTitle?: string
+  zhExcerpt?: string
+  /** 上一段英文的尾巴（第 2 段起） */
+  prevTail?: string
+  /** 名词对照表（第 1 段的产物） */
+  glossary?: string
+}): string {
+  const { part, parts, zhText } = input
+  const isFirst = part <= 1
+  const isLast = part >= parts
+  const glossary = String(input.glossary || '').trim()
+
+  const blocks: string[] = []
+  blocks.push(
+    [
+      'You are a native English-speaking fiction editor.',
+      `You are translating PART ${part} OF ${parts} of a finished Chinese short story into English.`,
+      'Rewrite it as an ORIGINAL ENGLISH short story — a reader must never feel it was translated.',
+      '',
+      '【不可越界的红线】',
+      '1. 情节、人物、人物关系、情绪走向、结局指向、伏笔位置一律保持不变；不许增加情节、不许删减情节、不许新增角色、不许改结局。',
+      '2. 不要解释文化背景，也不要加译注 —— 需要读者自己体会的地方就让它留白。',
+      '',
+      '【分段翻译特有的规矩（整篇翻译不会踩，分段最容易踩）】',
+      `3. 你只翻第 ${part} 段 / 共 ${parts} 段：既不要把整篇重讲一遍，也不要跳过这一段的内容。`,
+      isFirst
+        ? '4. 这一段是全文开头 —— 照中文的开头写，不要自己发明一个更"漂亮"的开场。'
+        : '4. 这不是开头 —— 绝对不要重新起头、不要写「前情提要」、不要复述上一段，直接从上一段停下的地方往下写。',
+      isLast
+        ? '5. 这一段是结尾 —— 把故事收在中文原文收住的地方，不要额外补一段总结。'
+        : '5. 这不是结尾 —— 不要收尾、不要总结、不要升华，故事后面还要继续。',
+      '6. 保持同一人称、同一时态、同一语气；人名、地名一律用下面【名词对照表】里的写法。',
+      '7. 中文成语、俗语不要直译，换成英语读者熟悉的说法；句子顺序可以重组。',
+      '8. Use straight, concrete prose. Show, do not tell. 引号用弯引号 “ ”，破折号用 —。',
+    ].join('\n')
+  )
+
+  if (glossary) {
+    blocks.push('', '【名词对照表（必须照用，一个字母都不许改）】', glossary)
+  }
+  if (!isFirst && input.prevTail?.trim()) {
+    blocks.push('', '【上一段英文的结尾（供你接续，不要重复输出它）】', input.prevTail.trim().slice(-600))
+  }
+  if (isFirst) {
+    const full = String(input.zhFullText || '').trim()
+    if (full) {
+      blocks.push(
+        '',
+        '【全文中文（只用来写标题、摘要、名词对照表 —— 正文只翻下面那一段，别把全文都翻了）】',
+        full.slice(0, 12000)
+      )
+    }
+    blocks.push(
+      '',
+      `【中文标题】${String(input.zhTitle || '').trim() || '（无）'}`,
+      `【中文摘要】${String(input.zhExcerpt || '').trim() || '（无）'}`
+    )
+  }
+
+  blocks.push('', `【第 ${part} 段的中文原文（只翻这一段）】`, zhText.trim())
+
+  blocks.push(
+    '',
+    '【输出格式（严格照办，不要输出任何多余内容）】'
+  )
+  if (isFirst) {
+    blocks.push(
+      '<<<TITLE>>>',
+      '(The English title, in Title Case.)',
+      '<<<EXCERPT>>>',
+      '(A 120–180 character English excerpt for the listing page. Do not spoil the ending.)',
+      '<<<GLOSSARY>>>',
+      '(Every proper noun in the WHOLE story with its fixed English spelling, one per line, in the form 中文 = English — all person and place names, no duplicates.)',
+      '<<<BODY>>>',
+      `(The English text of PART 1 only. Use <p> for paragraphs, <h3> for a section heading if needed, <strong> for emphasis, <blockquote> for quoted passages.)`
+    )
+  } else {
+    blocks.push(
+      '<<<BODY>>>',
+      `(The English text of PART ${part} only. Use <p> for paragraphs. Do NOT output TITLE / EXCERPT / GLOSSARY.)`
+    )
+  }
+
+  return blocks.join('\n')
+}
 

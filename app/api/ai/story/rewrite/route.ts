@@ -5,7 +5,7 @@ import { countChineseChars, parseDelimitedStory, toStoryHtml } from '@/lib/story
 import { getSupabaseAdminClient } from '@/lib/supabaseAdmin'
 import { loadSkill } from '@/lib/storySkills'
 import { REVIEW_DIMENSIONS, type ReviewDimensionKey, type ReviewIssue } from '@/lib/storyReview'
-import { buildRewriteSystemPrompt, buildRewriteUserPrompt } from '@/lib/storyRewrite'
+import { buildRewriteSystemPrompt, buildRewriteUserPrompt, detectPlotLevelRequest } from '@/lib/storyRewrite'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -42,10 +42,12 @@ function normalizeIssues(input: unknown): ReviewIssue[] {
 /**
  * ✨ 定向重写（P3 第三遍）—— 只改点名的那几处，别的逐字保留。
  *
- * 入参：{ html 或 text, title, excerpt, issues: ReviewIssue[], notes, skill }
+ * 入参：{ html 或 text, title, excerpt, issues: ReviewIssue[], notes, idea, materials, skill }
  *   issues = AI 自评的清单（勾选过的）；notes = 站长自己写的评价与想法。
  *   两者至少给一个 —— 只有站长意见时，模型照样按他的意见定向改。
- * 出参：{ ok, data: { title, excerpt, html, chars, before, after, rewrites, warnings, model, ms } }
+ *   idea / materials = 生成时填的构思与参考素材：他要求「按素材改编」时，模型得看得到那份素材，
+ *   否则它只能猜着改，改完还是原来那一套（这就是「参考素材被当空气」的根因）。
+ * 出参：{ ok, data: { title, excerpt, html, chars, before, after, rewrites, plotLevel, warnings, model, ms } }
  *
  * 和第一遍同一套写作宪法（角色 + 写法 + 禁忌），所以改完不会换一种腔调。
  */
@@ -63,6 +65,12 @@ export async function POST(req: NextRequest) {
     const bodyText = (text || htmlToPlainText(html) || '').trim()
     // 站长自己写的评价与想法 —— 和勾选的清单一起当改稿依据（上限与前端 textarea 的 maxLength 对齐）
     const notes = String(body?.notes || '').trim().slice(0, 800)
+    // 生成时填的构思与参考素材：他写「主要情节参考我给的材料」时，这两份是唯一依据。
+    // 以前这里不读这两个字段 —— 所以那份素材从头到尾没进过提示词，模型改的当然还是自己原来那一套。
+    const idea = String(body?.idea || '').trim().slice(0, 800)
+    const materials = String(body?.materials || '').trim().slice(0, 4000)
+    // 他是不是在提情节级要求（改结构 / 换场景 / 改结局），而不是只改几句的口气
+    const plotLevel = detectPlotLevelRequest(notes)
 
     if (bodyText.length < 80) return jsonResponse({ error: '正文太短了（至少 80 字才值得重写）' }, 400)
     if (bodyText.length > 12000) return jsonResponse({ error: '正文太长了，重写只适用于单篇短篇（12000 字以内）' }, 400)
@@ -81,7 +89,7 @@ export async function POST(req: NextRequest) {
     const ai = await callText({
       task: 'revise',
       system: buildRewriteSystemPrompt(chosen.row),
-      prompt: buildRewriteUserPrompt({ title, bodyText, excerpt, issues, notes }),
+      prompt: buildRewriteUserPrompt({ title, bodyText, excerpt, issues, notes, idea, materials }),
       // 改稿要贴着原文走：温度比初稿低一档，太高会「顺手发挥」
       temperature: 0.6,
       maxOutputTokens: 8192,
@@ -105,9 +113,16 @@ export async function POST(req: NextRequest) {
 
     const warnings: string[] = []
     if (chosen.warning) warnings.push(chosen.warning)
-    // 定向改稿不该大幅改变篇幅：偏太多说明它顺手重写了，提醒站长比对一下
-    if (chars < bodyText.length * 0.7) warnings.push(`改完比原稿短了不少（${bodyText.length} → ${chars} 字），留意有没有被删段`)
-    if (chars > bodyText.length * 1.3) warnings.push(`改完比原稿长了不少（${bodyText.length} → ${chars} 字），留意有没有被加料`)
+    if (plotLevel) {
+      // 情节级返工本来就该变长变短、该删该加 —— 再报「比原稿长/短了」只会让人误以为出错了
+      warnings.push(
+        `这一版按你的要求做了情节 / 结构级改动（${bodyText.length} → ${chars} 字），请通读确认再插入`
+      )
+    } else {
+      // 定向改稿不该大幅改变篇幅：偏太多说明它顺手重写了，提醒站长比对一下
+      if (chars < bodyText.length * 0.7) warnings.push(`改完比原稿短了不少（${bodyText.length} → ${chars} 字），留意有没有被删段`)
+      if (chars > bodyText.length * 1.3) warnings.push(`改完比原稿长了不少（${bodyText.length} → ${chars} 字），留意有没有被加料`)
+    }
     if (ai.truncated) warnings.push('模型输出被长度上限截断了，建议重试一次')
 
     const nextTitle =
@@ -118,6 +133,10 @@ export async function POST(req: NextRequest) {
       after: chars,
       issues: issues.length,
       notes: notes.length,
+      // 素材有没有真的进提示词，看这两个数就知道（0 = 站长没填，或前端又没传）
+      idea: idea.length,
+      materials: materials.length,
+      plotLevel,
       dims: Array.from(new Set(issues.map((i) => i.dimension))).join(','),
       skill: chosen.row?.code || '(无)',
       model: ai.model,
@@ -134,6 +153,8 @@ export async function POST(req: NextRequest) {
         before: bodyText.length,
         after: chars,
         rewrites: issues.length,
+        /** 这一遍是不是情节级改动 —— 前端据此换提示语（篇幅变了是正常的） */
+        plotLevel,
         warnings,
         model: ai.model,
         ms: ai.ms,

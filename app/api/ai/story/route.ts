@@ -44,6 +44,17 @@ export async function POST(req: NextRequest) {
     const idea = String(body?.idea ?? (combo as any).idea ?? '').trim().slice(0, 800)
     const materials = String(body?.materials ?? (combo as any).materials ?? '').trim().slice(0, 4000)
     const continueFrom = String(body?.continueFrom || '').trim()
+    /**
+     * 最近已经写过的标题（编辑页从数据库里捞的 + 本次会话里刚生成的）。
+     * 用来对抗"文章同质化"：把往期标题贴回提示词，模型才会主动换开场、换主角配置。
+     * 前端不传就当作没有 —— 生成照常进行，只是少一层去重。
+     */
+    const avoidTitles = Array.isArray(body?.avoidTitles)
+      ? (body.avoidTitles as unknown[])
+          .map((t) => String(t ?? '').trim())
+          .filter(Boolean)
+          .slice(0, 16)
+      : []
 
     const admin = getSupabaseAdminClient()
     if (!admin.ok) return jsonResponse({ error: admin.error }, 500)
@@ -97,10 +108,12 @@ export async function POST(req: NextRequest) {
       ? buildContinueUserPrompt({
           tagsByDimension,
           idea,
+          // 续写也要带上改编底本：不带的话，「接着写下去」会把它拐回模型默认的那一套情节
+          materials,
           tailText: continueFrom,
           remainingWords: Math.max(300, length - countChineseChars(continueFrom)),
         })
-      : buildStoryUserPrompt({ combo, tagsByDimension, idea, materials, length })
+      : buildStoryUserPrompt({ combo, tagsByDimension, idea, materials, length, avoidTitles })
 
     const ai = await callText({
       task: 'story',
@@ -128,8 +141,23 @@ export async function POST(req: NextRequest) {
 
     if (continueFrom) {
       if (chars < 120) return jsonResponse({ error: '模型没有续写出有效内容，请再试一次' }, 502)
-      console.log(`[ai-story:${reqId}] continue ok`, { chars, model: ai.model })
-      return Response.json({ ok: true, data: { mode: 'continue', html, chars, model: ai.model } })
+      // 把 truncated 一起回给前端：前端据此决定要不要自动再续一轮。
+      // 以前这里什么都不说，站长只能看到"点了一次就没动静了"，还得自己判断写没写完。
+      const continueWarnings = ai.truncated
+        ? ['这一轮又被长度上限截断了 —— 可以再点一次「接着写下去」，或者把篇幅调大']
+        : []
+      console.log(`[ai-story:${reqId}] continue ok`, { chars, truncated: ai.truncated, model: ai.model })
+      return Response.json({
+        ok: true,
+        data: {
+          mode: 'continue',
+          html,
+          chars,
+          warnings: continueWarnings,
+          truncated: ai.truncated,
+          model: ai.model,
+        },
+      })
     }
 
     const fallbackTitle = idea.split(/[，。！？、\s]/)[0]?.slice(0, 14) || '未命名短篇'
@@ -154,6 +182,8 @@ export async function POST(req: NextRequest) {
         html,
         chars,
         warnings,
+        /** 这一篇是不是写到模型的输出上限就断了 —— 前端据此自动「接着写下去」 */
+        truncated: ai.truncated,
         model: ai.model,
         skill: chosen.row ? { code: chosen.row.code, name: chosen.row.name } : null,
       },

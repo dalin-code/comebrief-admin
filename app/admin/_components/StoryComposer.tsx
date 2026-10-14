@@ -35,6 +35,8 @@ export type GeneratedStory = {
   warnings: string[]
   /** 服务端回执：这一版是哪套写法写的（留个痕，方便对比几版稿子） */
   skill?: { code: string; name: string } | null
+  /** 这一版是不是写到模型的输出上限就断了 —— 「接着写下去」的自动补字就是看这个 */
+  truncated?: boolean
 }
 
 type Preset = { id: string; name: string; combo: StoryCombo; updated_at?: string }
@@ -65,6 +67,20 @@ const EMPTY_COMBO: StoryCombo = { length: 1500 }
 const TRANSIENT_STATUS = new Set([502, 503])
 /** 重发前的等待：给对面一点喘息，也避免拿同一个坏连接再撞一次 */
 const TRANSIENT_RETRY_WAIT_MS = 800
+
+/**
+ * 自动续写（「接着写下去」）的刹车值。
+ *
+ * 站长 2026-10 的原话：「当 AI 请求模型字数达到上限后，点击续写可以自动延续往下写，
+ * 而不是卡在那里不动」。所以续写不再只发一次请求：
+ *   写不到目标字数、或这一轮又被长度上限截断 → 自动再续一轮，直到写够或撞到上限。
+ * 一轮大概 20–40 秒，三轮封顶 —— 再长就该让站长自己判断了，不能让他干等五分钟。
+ */
+const MAX_AUTO_CONTINUE_ROUNDS = 3
+/** 一轮至少要新增这么多字才算「有进展」；低于这个数就停手（模型在复读，再续也是浪费） */
+const CONTINUE_MIN_GAIN = 60
+/** 写到目标字数的这个比例就算够了，不必再续 */
+const CONTINUE_ENOUGH_RATIO = 0.92
 
 /** 严重度 → 徽章配色（只有这一处用，就近放着） */
 const severityTone = (s: ReviewIssue['severity']) =>
@@ -114,6 +130,16 @@ export function StoryComposer({
   const [tipSide, setTipSide] = useState<'left' | 'right'>('left')
   const [skills, setSkills] = useState<StorySkill[]>([])
   const [skillError, setSkillError] = useState('')
+  /** 自动续写到第几轮 / 这一轮已补多少字（按钮上显示进度用） */
+  const [continueRound, setContinueRound] = useState(0)
+  const [continueGain, setContinueGain] = useState(0)
+  /**
+   * 「不要再撞」的往期标题：打开面板时从库里捞最近 12 篇（recentTitles），
+   * 加上本次会话里刚生成出来的（sessionTitles）。两个合起来交给服务端写进提示词 ——
+   * 这是对抗「文章同质化」最直接的一招，见 lib/storyPrompt.ts 的 buildStorySetting。
+   */
+  const [recentTitles, setRecentTitles] = useState<string[]>([])
+  const [sessionTitles, setSessionTitles] = useState<string[]>([])
 
   const selection = combo || EMPTY_COMBO
   const length = Number(selection.length) || 1500
@@ -181,6 +207,25 @@ export function StoryComposer({
         )
       } else {
         setSkills((sk || []) as StorySkill[])
+      }
+
+      // 往期标题：交给服务端写进「不要再撞」那一段。
+      // 读不到（列名对不上 / 网络抖）也不影响写稿，只是少一层去重，所以静默降级。
+      const { data: recentArticles, error: recentErr } = await supabase
+        .from('articles')
+        .select('title_zh,title')
+        .order('created_at', { ascending: false })
+        .limit(12)
+      if (!alive) return
+      if (recentErr) {
+        console.warn('[story-composer] 读往期标题失败，本次不做查重：', recentErr.message)
+        setRecentTitles([])
+      } else {
+        setRecentTitles(
+          ((recentArticles || []) as any[])
+            .map((r) => String(r?.title_zh || r?.title || '').trim())
+            .filter(Boolean)
+        )
       }
     }
     load()
@@ -321,7 +366,17 @@ export function StoryComposer({
     setPicked([])
     setReviewNotes('')
     try {
-      const data = await apiPost('/api/ai/story', { combo: selection, idea, materials, length, skill: skillCode })
+      // 「不要再撞」的名单：库里最近 12 篇 + 本次会话刚生成的几篇。
+      // 不传也能生成，只是没有这层去重 —— 那就是「文章同质化」的来源。
+      const avoidTitles = [...sessionTitles, ...recentTitles].slice(0, 16)
+      const data = await apiPost('/api/ai/story', {
+        combo: selection,
+        idea,
+        materials,
+        length,
+        skill: skillCode,
+        avoidTitles,
+      })
       const story: GeneratedStory = {
         title: String(data?.title || ''),
         excerpt: String(data?.excerpt || ''),
@@ -330,10 +385,18 @@ export function StoryComposer({
         chars: Number(data?.chars || 0),
         warnings: Array.isArray(data?.warnings) ? data.warnings.map(String) : [],
         skill: data?.skill ?? null,
+        truncated: Boolean(data?.truncated),
       }
       setPreview(story)
+      // 这一篇的标题也进「不要再撞」的名单：连着点两次生成，第二篇就不会是换皮版
+      if (story.title) setSessionTitles((prev) => [story.title, ...prev].slice(0, 12))
       onComboChange({ ...selection, idea, materials, length, skill: skillCode })
-      showToast(`写好了：${story.chars} 字`, 'success')
+      showToast(
+        story.truncated
+          ? `写好了：${story.chars} 字（被模型输出上限截断，点「接着写下去」会自动补完）`
+          : `写好了：${story.chars} 字`,
+        'success'
+      )
     } catch (e: any) {
       setError(e?.message || '生成失败')
     } finally {
@@ -341,30 +404,91 @@ export function StoryComposer({
     }
   }
 
+  /**
+   * 「接着写下去」—— 自动续写到写够、或撞到轮次上限为止。
+   *
+   * 三个关键点（都是实际用出来的坑）：
+   *   1. 续写的"底稿"是**预览**，不一定是编辑器。以前只认编辑器正文，
+   *      生成完还没点「插入编辑器」就点续写，只会得到一句「正文里还没有中文内容」——看着就像卡住了。
+   *   2. 一轮不够就自己再来一轮。模型常写到输出上限就断，一轮只能补几百字；
+   *      以前点一次才动一次，站长得反复点；现在一次点击一直补到目标字数。
+   *   3. 已经插进编辑器的，续写要两边一起长（预览和编辑器各加一段），
+   *      否则预览会比编辑器旧，再点「插入编辑器」反而把新续的内容盖掉。
+   */
   const handleContinue = async () => {
-    const current = getCurrentZhText()
-    if (current.length < 50) {
-      showToast('正文里还没有中文内容，先插入或手写一段', 'error')
+    const previewText = preview ? htmlToPlainText(preview.html).trim() : ''
+    const draftText = previewText || getCurrentZhText().trim()
+    if (draftText.length < 50) {
+      showToast('正文里还没有中文内容，先写一段或先生成一篇', 'error')
       return
     }
+
     setBusy('continue')
     setError('')
+    setContinueRound(0)
+    setContinueGain(0)
     try {
-      const data = await apiPost('/api/ai/story', {
-        combo: selection,
-        idea,
-        materials,
-        length,
-        skill: skillCode,
-        continueFrom: current,
-      })
-      onAppend(toStoryHtml(String(data?.html || '')))
+      let accText = draftText
+      let rounds = 0
+      let gained = 0
+      let lastTruncated = false
+
+      for (let round = 1; round <= MAX_AUTO_CONTINUE_ROUNDS; round++) {
+        setContinueRound(round)
+        const data = await apiPost('/api/ai/story', {
+          combo: selection,
+          idea,
+          materials,
+          length,
+          skill: skillCode,
+          continueFrom: accText,
+        })
+        const pieceHtml = toStoryHtml(String(data?.html || ''))
+        const pieceChars = Number(data?.chars || 0)
+        // 这一轮几乎没写出东西 —— 再点也是复读，停手，别耗站长时间
+        if (!pieceHtml.trim() || pieceChars < CONTINUE_MIN_GAIN) break
+
+        rounds = round
+        gained += pieceChars
+        accText = `${accText}\n${htmlToPlainText(pieceHtml)}`
+        lastTruncated = Boolean(data?.truncated)
+        setContinueGain(gained)
+
+        setPreview((prev) =>
+          prev
+            ? {
+                ...prev,
+                html: `${prev.html}${pieceHtml}`,
+                chars: (prev.chars || 0) + pieceChars,
+                warnings: [],
+                truncated: lastTruncated,
+              }
+            : prev
+        )
+        // 预览就是这一版的草稿；编辑器里已经有稿子的（已插入），让它一起长
+        if (!preview || applied) onAppend(pieceHtml)
+
+        // 写够了、这一轮也没被截断 → 收工
+        if (!lastTruncated && countChineseChars(accText) >= length * CONTINUE_ENOUGH_RATIO) break
+      }
+
+      if (!rounds) {
+        setError('这一轮没写出新内容。换个构思，或者把篇幅调大一点再试。')
+        return
+      }
       onComboChange({ ...selection, idea, materials, length, skill: skillCode })
-      showToast(`已续写 ${data?.chars || ''} 字`, 'success')
+      showToast(
+        lastTruncated
+          ? `已续写 ${gained} 字（${rounds} 轮 · 又被输出上限截断，可以再点一次继续补）`
+          : `已续写 ${gained} 字（${rounds} 轮）`,
+        'success'
+      )
     } catch (e: any) {
       setError(e?.message || '续写失败')
     } finally {
       setBusy('idle')
+      setContinueRound(0)
+      setContinueGain(0)
     }
   }
 
@@ -403,6 +527,11 @@ export function StoryComposer({
   /**
    * P3 第三遍：定向重写 —— 只改「勾选的 AI 条目 + 站长自己写的意见」，其余逐字保留。
    * 只有站长意见、一条 AI 条目都没勾也能改：他自己看出来的问题，凭什么非得 AI 先点头。
+   *
+   * 2026-10 修的一个洞：以前这里只传 issues / notes，站长填的【本篇构思】和【参考素材】
+   * 压根没上去 —— 所以他写「主要情节参考我给的素材」，模型手里没有素材，只能猜着改，
+   * 改完还是原来那一套。现在三样一起传；他要是明确要求改情节，后端会按情节级改动处理
+   * （返回 plotLevel，篇幅变了是正常的）。
    */
   const handleRewrite = async () => {
     if (!preview) return
@@ -421,6 +550,9 @@ export function StoryComposer({
         html: preview.html,
         issues,
         notes,
+        // 构思与参考素材跟着一起传：他说「按素材改编」时，模型才拿得到那份素材
+        idea,
+        materials,
         skill: skillCode,
       })
       setPreview({
@@ -439,7 +571,13 @@ export function StoryComposer({
       setPicked([])
       setApplied(false)
       const basis = [issues.length ? `${issues.length} 条清单` : '', notes ? '你的意见' : ''].filter(Boolean).join(' + ')
-      showToast(`已按${basis}重写：${data?.before ?? '?'} → ${data?.after ?? '?'} 字`, 'success')
+      const plotLevel = Boolean(data?.plotLevel)
+      showToast(
+        plotLevel
+          ? `已按${basis}做了情节级改写：${data?.before ?? '?'} → ${data?.after ?? '?'} 字（篇幅跟着变是正常的，请通读）`
+          : `已按${basis}重写：${data?.before ?? '?'} → ${data?.after ?? '?'} 字`,
+        'success'
+      )
     } catch (e: any) {
       setError(e?.message || '重写失败（原稿没有动）')
     } finally {
@@ -732,19 +870,22 @@ export function StoryComposer({
             />
           </div>
 
-          {/* 参考素材 */}
+          {/* 参考素材 —— 有素材就是「改编底本」：以它为主线情节，AI 只补细节与衔接 */}
           <div className="space-y-2.5">
             <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left block">
-              参考素材
+              参考素材 · 改编底本
               <span className="ml-2 font-bold tracking-normal normal-case text-slate-300">可留空</span>
             </label>
             <textarea
               value={materials}
               onChange={(e) => setMaterials(e.target.value)}
               rows={3}
-              placeholder="从新闻或真实经历里抄一点细节进来（职业、地点、一句对话），故事会立刻真实很多。"
+              placeholder="粘贴你的原始故事或梗概：生成时会以它为主线情节来改编，AI 只补细节、场景衔接和缺失的铺垫。"
               className="w-full p-5 bg-slate-50 rounded-3xl border border-slate-100 outline-none text-[13px] font-medium leading-relaxed resize-none focus:border-indigo-200 focus:bg-white transition-all"
             />
+            <p className="text-[9px] font-bold text-slate-300 leading-relaxed text-left px-1">
+              填了就以它为主线情节 —— 人物关系、关键事件、结局方向都照它来，不会再天马行空另写一个故事；留空则按上面的构思自由创作。
+            </p>
           </div>
 
           {/* 篇幅 */}
@@ -859,6 +1000,12 @@ export function StoryComposer({
                   <AlertTriangle size={12} className="mt-0.5 shrink-0" /> {w}
                 </p>
               ))}
+              {preview.truncated && (
+                <p className="flex items-start gap-2 text-[10px] font-bold text-indigo-500 text-left">
+                  <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                  这一版写到模型的输出上限就断了 —— 点下面的「接着写下去」会自动一轮轮补完，不用自己反复点。
+                </p>
+              )}
               {/* ---- P3 第二遍：AI 自评（只读不改稿） ---- */}
               <div className="pt-4 border-t border-slate-200/80 space-y-3">
                 <div className="flex items-center justify-between gap-3">
@@ -988,14 +1135,15 @@ export function StoryComposer({
                   type="button"
                   onClick={handleRewrite}
                   disabled={busy !== 'idle' || (!picked.length && !reviewNotes.trim())}
-                  title="只改勾选的条目和你写的意见，其余逐字保留"
+                  title="只改勾选的条目和你写的意见，其余逐字保留；你要它改情节 / 开篇 / 结局时，它会真的改结构"
                   className="w-full h-12 rounded-2xl bg-indigo-600 text-white text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-indigo-700 disabled:opacity-50 transition-colors"
                 >
                   {busy === 'rewrite' ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
                   {busy === 'rewrite' ? '正在重写…' : rewriteLabel}
                 </button>
                 <p className="text-[9px] font-bold text-slate-300 text-left">
-                  重写只改点名的地方，没点到的句子逐字保留；改完要重新「插入编辑器」。
+                  重写只改点名的地方，没点到的句子逐字保留；你要求改情节 / 开篇 / 结局时，它会真的改结构（篇幅也会跟着变）。
+                  改完要重新「插入编辑器」。
                 </p>
               </div>
 
@@ -1056,10 +1204,11 @@ export function StoryComposer({
           >
             {busy === 'continue' ? (
               <>
-                <Loader2 size={14} className="animate-spin" /> 续写中… {elapsed}s
+                <Loader2 size={14} className="animate-spin" />
+                自动续写中… 第 {continueRound || 1}/{MAX_AUTO_CONTINUE_ROUNDS} 轮 · 已补 {continueGain} 字 · {elapsed}s
               </>
             ) : (
-              <>接着写下去（补足字数 / 把没收好的尾收掉）</>
+              <>接着写下去（写不够会自动一轮轮补到目标字数）</>
             )}
           </button>
         </footer>
