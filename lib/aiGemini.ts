@@ -2,25 +2,24 @@ import type { NextRequest } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
 /**
- * Gemini + 后台鉴权的共用小工具。
+ * 后台接口的「钥匙 + 网络诊断 + 报错翻译」工具箱。
  *
- * 为什么单独抽一个文件：
- *   app/api/news/rewrite/route.ts 与 app/api/ai/draw/route.ts 里各写了一份几乎
- *   一样的「Bearer 校验 + 超时 fetch + JSON 兜底」。这次新增的 AI 创作接口要是
- *   再抄第三份，以后想调超时时间就得改三个地方。
- *   → 新接口一律从这里 import；那两个老路由保持原样不动（线上已跑通，没必要碰）。
+ * 职责边界（2026-10-10 重新划清）：**这个文件不再直接调模型**。
+ *   调模型统一走 lib/aiProvider 的 `callText()`（候选链 / 冷却 / 超时预算都在那儿）。
+ *   以前这里有个 `callGeminiText()`，只有摘要路由在用 —— 于是那条路的 429 判断、
+ *   换兜底、thinkingBudget 全是另一套逻辑，还拼不出跨供应商的兜底 URL。已删除。
+ *
+ * 这里留下的是纯粹、无状态的东西：
+ *   · requireAdmin / getBearer / jsonResponse —— 后台鉴权那套「三种失败分开说」；
+ *   · fetchWithTimeout / isAbortError / isNetworkFetchError / describeNetworkError —— 网络层；
+ *   · extractProviderMessage / parseProviderError / describeProviderError / logProviderError —— 错误层；
+ *   · parseJsonLoose / safeParseModelJson —— 模型输出的 JSON 兜底；
+ *   · stripFences / htmlToPlainText —— 从 storyPrompt 转发（那边保持零依赖，客户端也能用）。
+ *
+ * 为什么单独抽一个文件：app/api/news/rewrite/route.ts 与 app/api/ai/draw/route.ts 里
+ * 各写了一份几乎一样的「Bearer 校验 + 超时 fetch + JSON 兜底」。那两个老路由保持原样不动
+ * （线上已跑通），新接口一律从这里 import。
  */
-
-export const GEMINI_ENDPOINT = (model: string) =>
-  `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
-
-type GeminiApiResponse = {
-  candidates?: Array<{
-    content?: { parts?: Array<{ text?: string }> }
-    finishReason?: string
-  }>
-  promptFeedback?: { blockReason?: string }
-}
 
 export const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -110,6 +109,185 @@ export const describeNetworkError = (e: any) => {
 }
 
 /**
+ * 从各家错误体里挖出「模型自己说了什么」。
+ *
+ * 三家协议的错误体恰好都是 `{ error: { message } }`（OpenAI 兼容偶尔是 `{ message }`），
+ * 但以前我们直接把整段 JSON 塞进提示框，站长看到的是：
+ *   Gemini 429: {"error":{"code":429,"message":"You exceeded your current quota, please check
+ *   your plan and billing details. For more information on this error, head to:
+ *   https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to:
+ *   https://ai.dev/rate-limit. \n* Quota ex...
+ * 一屏红字、一句有用的都没有（额度用完该等、该换模型，还是该重试？看不出来）。
+ * 这里只负责「把 message 抠出来」，怎么说人话交给 describeProviderError。
+ */
+export const extractProviderMessage = (raw: string) => {
+  const s = String(raw || '').trim()
+  if (!s) return ''
+  try {
+    const j: any = JSON.parse(s)
+    const m = j?.error?.message ?? j?.message ?? j?.error
+    if (typeof m === 'string' && m.trim()) return m.replace(/\s+/g, ' ').trim()
+  } catch {
+    /* 不是 JSON（可能是网关的 HTML 错误页）—— 原样兜底 */
+  }
+  return s.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * 429 这类错误的「结构化解读」。
+ *
+ * 为什么不能只看那行 message（这条是被真实故障教出来的）：
+ *   Gemini 对**每分钟限流（RPM）**和**每日额度用尽（RPD）**回的正文几乎一模一样 ——
+ *   都是 `You exceeded your current quota, please check your plan and billing details…`。
+ *   旧代码拿 /quota|billing|free tier|plan/ 去猜，于是每一句 429 都被判成「今天的额度用完了」，
+ *   把一个「等 20 秒就好」的限流说成「去换模型 / 等明天」，把站长径直往错的方向指。
+ *
+ * 真正靠谱的判据（按可信度从高到低）：
+ *   ① details[].QuotaFailure.quotaId —— Google 会写死是哪个额度池：
+ *      `GenerateRequestsPerDayPerProjectPerModel-FreeTier`   → 每日额度，明天才恢复
+ *      `GenerateRequestsPerMinutePerProjectPerModel-…`       → 每分钟限流，缓一下就好
+ *   ② details[].RetryInfo.retryDelay（形如 `"23s"`）—— 短（≤2 分钟）说明很快能再试；
+ *      长、或对面干脆不说，才像日额度。
+ *   ③ 响应头 Retry-After（OpenAI 兼容 / Anthropic 走这个；Anthropic 还有
+ *      anthropic-ratelimit-requests-reset，是个 ISO 时间戳）。
+ *   ④ 什么线索都没有 → 当「限流」处理。宁可让站长等十几秒再点一次，
+ *      也别让他去改 .env.local（那才是真的白折腾）。
+ */
+export type ProviderErrorKind = 'rate' | 'quota' | 'auth' | 'notfound' | 'badrequest' | 'server' | 'unknown'
+
+export type ParsedProviderError = {
+  kind: ProviderErrorKind
+  /** 建议等待毫秒数；0 = 对面没说（那就别瞎猜） */
+  retryAfterMs: number
+  /** quotaId / error.code，日志用（前端不显示） */
+  code: string
+  /** 抠出来的模型原话（英文，可能很长）—— 只进日志 */
+  detail: string
+}
+
+/** `"23s"` / `"1.5s"` / `"120"` / ISO 时间戳 → 毫秒（认不出来给 0） */
+export const parseRetryDelay = (v: unknown): number => {
+  if (v == null) return 0
+  if (typeof v === 'number' && Number.isFinite(v)) return Math.max(0, Math.round(v * 1000))
+  const s = String(v).trim()
+  if (!s) return 0
+  const m = s.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h)?$/i)
+  if (!m) {
+    // Retry-After 的另一种写法是 HTTP 日期；Anthropic 的重置时间也走这条路
+    const at = Date.parse(s)
+    return Number.isFinite(at) ? Math.max(0, at - Date.now()) : 0
+  }
+  const n = Number(m[1])
+  const unit = (m[2] || 's').toLowerCase()
+  const factor = unit === 'ms' ? 1 : unit === 's' ? 1000 : unit === 'm' ? 60_000 : 3_600_000
+  return Math.max(0, Math.round(n * factor))
+}
+
+/** 超过这个等待时间就别再装作「缓一下就好」了 —— 日额度用尽是几小时起步 */
+const RETRY_SOON_MS = 2 * 60 * 1000
+
+export const parseProviderError = (status: number, raw: string, headers?: Headers): ParsedProviderError => {
+  const detail = extractProviderMessage(raw)
+  let quotaId = ''
+  let bodyRetryMs = 0
+  try {
+    const j: any = JSON.parse(String(raw || '').trim())
+    const details = j?.error?.details
+    if (Array.isArray(details)) {
+      for (const d of details) {
+        const t = String(d?.['@type'] || '')
+        if (t.includes('QuotaFailure')) {
+          const v = Array.isArray(d?.violations) ? d.violations[0] : null
+          quotaId = String(v?.quotaId || v?.quotaMetric || quotaId)
+        }
+        if (t.includes('RetryInfo') && d?.retryDelay) {
+          bodyRetryMs = Math.max(bodyRetryMs, parseRetryDelay(d.retryDelay))
+        }
+      }
+    }
+    // OpenAI 兼容偶尔把重试时间塞进 body，而不是响应头
+    if (!bodyRetryMs && j?.error?.retry_after != null) bodyRetryMs = parseRetryDelay(j.error.retry_after)
+  } catch {
+    /* 不是 JSON（网关 HTML 错误页之类）—— 只靠状态码和响应头 */
+  }
+
+  const retryAfterMs = Math.max(
+    bodyRetryMs,
+    parseRetryDelay(headers?.get('retry-after')),
+    parseRetryDelay(headers?.get('anthropic-ratelimit-requests-reset'))
+  )
+
+  if (status === 429) {
+    // quotaId 是 Google 自己写的「哪一个额度池」，比任何文本猜测都可信
+    const perDay = /perday|per_day|per-day|daily/i.test(quotaId) || /per\s*day|daily/i.test(detail)
+    const kind: ProviderErrorKind = perDay ? 'quota' : retryAfterMs > RETRY_SOON_MS ? 'quota' : 'rate'
+    return { kind, retryAfterMs, code: quotaId, detail }
+  }
+  if (status === 401 || status === 403) return { kind: 'auth', retryAfterMs, code: '', detail }
+  if (status === 404) return { kind: 'notfound', retryAfterMs, code: '', detail }
+  if (status === 400 || status === 422) return { kind: 'badrequest', retryAfterMs, code: '', detail }
+  if (status >= 500) return { kind: 'server', retryAfterMs, code: '', detail }
+  return { kind: 'unknown', retryAfterMs, code: '', detail }
+}
+
+/**
+ * 模型服务「回了错」时，把 HTTP 状态翻译成站长看得懂、照着能做的一句话。
+ *
+ * 长度纪律：提示框只有一行宽，429 那句以前写了 150 个字讲「①②③ 去哪儿改配置」，
+ * 结果整块红字糊住编辑区（2026-10-10 站长截图）。现在一句话讲完「是什么 + 怎么办」，
+ * 详细的配置步骤留给终端日志和 docs/ai-network-troubleshooting.md。
+ */
+export const describeProviderError = (
+  label: string,
+  status: number,
+  raw: string,
+  opts?: { headers?: Headers; model?: string }
+) => {
+  const parsed = parseProviderError(status, raw, opts?.headers)
+  const { detail } = parsed
+  const who = `${label}${opts?.model ? ` ${opts.model}` : ''}`
+  /** 「约 20 秒后恢复」/「」——对面没说就不编数字 */
+  const wait = parsed.retryAfterMs > 0 ? `约 ${Math.max(1, Math.round(parsed.retryAfterMs / 1000))} 秒后恢复` : ''
+
+  switch (parsed.kind) {
+    case 'rate':
+      return `${who} 被限流了：${wait ? `${wait}，` : '缓十几秒'}再点一次就行`
+    case 'quota':
+      // 额度用尽时「等多久」基本等于「等明天」，写在提示里只会让人误判 —— 直接给唯一的出路：换模型
+      return `${who} 免费额度用完了：换个模型立刻能写（AI_*_MODEL / AI_MODEL_FALLBACK）`
+    case 'auth':
+      return `${who} 报 ${status}：API Key 被拒绝了（没权限或填错了），检查 .env.local 里的 Key`
+    case 'notfound':
+      return `${who} 报 404：这个模型名不存在，或者这把 Key 用不了它`
+    case 'badrequest':
+      return `${who} 报 ${status}：请求被模型拒绝了${detail ? `（${detail.slice(0, 100)}）` : ''}`
+    case 'server':
+      return `${who} 报 ${status}：模型服务暂时不稳定，等几秒重试一次`
+    default:
+      return `${who} 报 ${status}${detail ? `：${detail.slice(0, 120)}` : '：无返回内容'}`
+  }
+}
+
+/**
+ * 失败的「一行日志」—— 英文原文、quotaId 这些东西前端放不下，但排查时全靠它们。
+ * 所有协议层（Gemini / OpenAI 兼容 / Anthropic）失败时都调这个，格式保持一致。
+ */
+export const logProviderError = (
+  label: string,
+  model: string,
+  status: number,
+  parsed: ParsedProviderError
+) => {
+  const bits = [
+    `status=${status}`,
+    `kind=${parsed.kind}`,
+    parsed.retryAfterMs ? `retryAfter=${Math.round(parsed.retryAfterMs / 1000)}s` : '',
+    parsed.code ? `quotaId=${parsed.code}` : '',
+  ].filter(Boolean)
+  console.log(`[ai-provider] ${label}/${model} 失败 ${bits.join(' ')} ｜ ${parsed.detail.slice(0, 220)}`)
+}
+
+/**
  * 后台接口统一鉴权 —— 必须是有效的 Supabase 登录态。
  * 失败时返回现成的 Response，调用处直接 `return result.response` 即可。
  *
@@ -169,95 +347,6 @@ export async function requireAdmin(
   }
 
   return { ok: false, response: jsonResponse({ error: 'unauthorized' }, 401) }
-}
-
-export function getGeminiConfig() {
-  return {
-    key: process.env.GEMINI_API_KEY || '',
-    // 与 news/rewrite 用同一个模型，可用 GEMINI_MODEL 覆盖
-    model: process.env.GEMINI_MODEL || 'gemini-3-flash-preview',
-  }
-}
-
-export type GeminiTextResult =
-  | { ok: true; text: string; truncated: boolean; finishReason: string }
-  | { ok: false; status: number; error: string }
-
-/**
- * 调一次 Gemini，返回模型原文（不解析）。
- *
- * jsonMode = true 时带上 responseMimeType: application/json，能挡掉绝大多数
- * 「模型自己包了一层 markdown 代码块」的脏输出；万一模型不听话，调用处还有修理兜底。
- */
-export async function callGeminiText(opts: {
-  prompt: string
-  temperature?: number
-  timeoutMs?: number
-  maxOutputTokens?: number
-  jsonMode?: boolean
-}): Promise<GeminiTextResult> {
-  const { key, model } = getGeminiConfig()
-  if (!key) return { ok: false, status: 500, error: 'Missing env: GEMINI_API_KEY' }
-
-  const generationConfig: Record<string, unknown> = {
-    temperature: typeof opts.temperature === 'number' ? opts.temperature : 0.7,
-  }
-  if (opts.maxOutputTokens) generationConfig.maxOutputTokens = opts.maxOutputTokens
-  if (opts.jsonMode) generationConfig.responseMimeType = 'application/json'
-
-  const timeoutMs = opts.timeoutMs ?? 20000
-
-  let resp: Response
-  try {
-    resp = await fetchWithTimeout(
-      GEMINI_ENDPOINT(model),
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: opts.prompt }] }],
-          generationConfig,
-        }),
-      },
-      timeoutMs
-    )
-  } catch (e: any) {
-    if (isAbortError(e)) {
-      return {
-        ok: false,
-        status: 504,
-        error: `AI 超时（超过 ${Math.round(timeoutMs / 1000)} 秒没回应），请重试一次，或把篇幅调短`,
-      }
-    }
-    return {
-      ok: false,
-      status: 502,
-      error: isNetworkFetchError(e) ? describeNetworkError(e) : e?.message || 'AI 请求失败',
-    }
-  }
-
-  if (!resp.ok) {
-    const raw = await resp.text().catch(() => '')
-    return { ok: false, status: 502, error: `Gemini ${resp.status}: ${raw.slice(0, 300) || '无返回内容'}` }
-  }
-
-  const data = (await resp.json().catch(() => ({}))) as GeminiApiResponse
-  const cand = data?.candidates?.[0]
-  const text = cand?.content?.parts?.map((p) => p?.text || '').join('') || ''
-  const finishReason = String(cand?.finishReason || '')
-
-  if (!text.trim()) {
-    const blocked = data?.promptFeedback?.blockReason
-    return {
-      ok: false,
-      status: 502,
-      error: blocked
-        ? `内容被模型安全策略拦下了（${blocked}），换个题材或构思再试`
-        : `模型返回了空内容${finishReason ? `（${finishReason}）` : ''}`,
-    }
-  }
-
-  return { ok: true, text, truncated: finishReason === 'MAX_TOKENS', finishReason }
 }
 
 export const parseJsonLoose = (content: string) => {
