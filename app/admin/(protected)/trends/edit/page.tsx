@@ -14,17 +14,20 @@ import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import ImageExtension from '@tiptap/extension-image'
 import { StoryComposer, type GeneratedStory } from '@/app/admin/_components/StoryComposer'
-import { buildArticleSlug, countChineseChars, htmlToPlainText, isUsableSlug } from '@/lib/storyPrompt'
+import AiHealthCard from '@/app/admin/_components/AiHealthCard'
+import { buildArticleSlug, countChineseChars, htmlToPlainText, isMostlyChinese, isUsableSlug, pickChineseOriginal, splitTranslationChunks } from '@/lib/storyPrompt'
+import { DEFAULT_EDITOR_PERSONA, EDITOR_PERSONAS, randomEditorPersona, type EditorPersona } from '@/lib/editors'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-const INITIAL_EDITORS = [
-  { name: 'Daling Lin', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Daling&backgroundColor=b6e3f4' },
-  { name: 'Nexus AI Lab', avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=Nexus&backgroundColor=ffd5dc' },
-  { name: 'Alex Rivera', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alex&backgroundColor=c0aede' },
-  { name: 'Jordan Smith', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Jordan&backgroundColor=ffe0a3' },
-  { name: 'Elena Rodriguez', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Elena&backgroundColor=9bd1d9' },
-  { name: 'Marcus Chen', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Marcus&backgroundColor=f5b7a8' },
-]
+/**
+ * 一次翻译多少汉字。
+ *
+ * 1 段 = 一次请求。整篇一次性翻的时候，一篇 3000 字的中文会同时撞上
+ * 「模型输出上限」和「路由 60 秒超时」，站长的体感就是「文章一长就翻译不了」。
+ * 切成 900 字一段之后，每段单独一次请求，长文也翻得完，还能显示「第 2/5 段」。
+ * 这个数字与 lib/storyPrompt 的 TRANSLATE_CHUNK_CHARS 是同一个口径。
+ */
+const TRANSLATE_CHUNK_CHARS = 900
 
 const INITIAL_LABELS = [
   { id: 'hot', name: 'Trending', icon: <Flame size={12} />, color: 'text-orange-500 bg-orange-50' },
@@ -82,7 +85,7 @@ function EditorContentComponent() {
   const articleId = searchParams.get('id');
   
   const [isMounted, setIsMounted] = useState(false);
-  const [notice, setNotice] = useState<{msg: string, type: 'success' | 'error'} | null>(null);
+  const [notice, setNotice] = useState<{msg: string, type: 'success' | 'error' | 'info'} | null>(null);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -100,12 +103,16 @@ function EditorContentComponent() {
 
   // 🌐 双语：中文 = 原稿（只有后台看得到），英文 = 前台真正显示的那一版。
   //    title / excerpt / 编辑器里的内容 = 当前页签这一边，另一边暂存在 ref 里。
-  const [lang, setLang] = useState<'zh' | 'en'>('en');
+  //    页签初值：改稿子看英文版（前台长什么样就编辑什么），新建稿从「中文原稿」开始 ——
+  //    新建稿默认停在英文页签的话，很容易把中文正文直接粘进英文那一栏（前台就挂中文了）。
+  const [lang, setLang] = useState<'zh' | 'en'>(articleId ? 'en' : 'zh');
   const [titleZh, setTitleZh] = useState('');
   const [excerptZh, setExcerptZh] = useState('');
   const [translatedAt, setTranslatedAt] = useState<string | null>(null);
   const [zhUpdatedAt, setZhUpdatedAt] = useState<string | null>(null);
   const [translating, setTranslating] = useState(false);
+  /** 分批翻译时的进度文案（例如「正在翻译第 2/5 段…」）；只有一段时是空串 */
+  const [translateStep, setTranslateStep] = useState('');
   const [extractingExcerpt, setExtractingExcerpt] = useState(false);
   const [zhReady, setZhReady] = useState(false);
   const [slug, setSlug] = useState('');
@@ -119,8 +126,10 @@ function EditorContentComponent() {
 
   const [coverUrl, setCoverUrl] = useState('');
   const [coverUrlShare, setCoverUrlShare] = useState('');
-  const [authorName, setAuthorName] = useState(INITIAL_EDITORS[0].name);
-  const [authorAvatar, setAuthorAvatar] = useState(INITIAL_EDITORS[0].avatar);
+  const [authorName, setAuthorName] = useState(DEFAULT_EDITOR_PERSONA.name);
+  const [authorAvatar, setAuthorAvatar] = useState(DEFAULT_EDITOR_PERSONA.avatar);
+  /** 「发布身份」的 20 组头像面板是否展开（默认收起，别把侧栏撑太长） */
+  const [authorPickerOpen, setAuthorPickerOpen] = useState(false);
   
   const [postStatus, setPostStatus] = useState<'draft' | 'published' | 'scheduled'>('published');
   const [scheduledAt, setScheduledAt] = useState('');
@@ -139,10 +148,27 @@ function EditorContentComponent() {
   // 🚀 核心正位：精简物理直调本地图片所用的两个 Input 引用
   const coverFileInputRef = useRef<HTMLInputElement>(null);
   const hasLoadedRef = useRef(false);
+  /**
+   * 上一次生成摘要是「复用」来的吗？
+   * 是的话，这一下再点「生成摘要」就得强制重新问模型（请求体带 fresh: true）——
+   * 否则后端 5 分钟内的记忆会一直把同一个结果还回来，站长会以为按钮坏了。
+   */
+  const excerptFreshRef = useRef(false);
 
-  const showToast = useCallback((msg: string, type: 'success' | 'error') => {
+  /**
+   * 浮动提示。
+   *
+   * 两个坑都是 2026-10-10 那张截图教出来的：
+   *   ① 时长写死 3500ms —— 「主模型限流、兜底也限流、去哪儿改配置」这种要读完才能动，
+   *      3.5 秒根本不够，红字一闪而过，站长只知道「又挂了」。错误现在留 8 秒。
+   *   ② 定时器没管住 —— 连续弹两条时，第一条的定时器会把第二条提前抹掉。
+   *      现在共用同一个 ref：新提示进来先把旧的收掉，后弹的那条才能活满自己的时间。
+   */
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = useCallback((msg: string, type: 'success' | 'error' | 'info') => {
     setNotice({ msg, type });
-    setTimeout(() => setNotice(null), 3500);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setNotice(null), type === 'error' ? 8000 : type === 'info' ? 5500 : 3500);
   }, []);
 
   /**
@@ -319,8 +345,8 @@ function EditorContentComponent() {
             };
             setCoverUrl(data.cover_url || '');
             setCoverUrlShare(data.cover_url_share || '');
-            setAuthorName(data.author_name || INITIAL_EDITORS[0].name);
-            setAuthorAvatar(data.author_avatar || INITIAL_EDITORS[0].avatar);
+            setAuthorName(data.author_name || DEFAULT_EDITOR_PERSONA.name);
+            setAuthorAvatar(data.author_avatar || DEFAULT_EDITOR_PERSONA.avatar);
             if (data.status) setPostStatus(data.status);
             if (data.scheduled_at) {
               const localDate = new Date(data.scheduled_at);
@@ -357,8 +383,22 @@ function EditorContentComponent() {
   const handleAutoExtractExcerpt = async () => {
     if (!editor) return;
     const bodyHtml = editor.getHTML() || '';
-    if (htmlToPlainText(bodyHtml).length < 80) {
-      showToast('正文太短了，写点内容再生成摘要', 'error');
+    const bodyText = htmlToPlainText(bodyHtml);
+    if (bodyText.length < 80) {
+      // 英文页签还空着、中文那边有正文 → 该说的是「先去翻译」，而不是「去写点东西」
+      const zhSide = pickZhCandidate(lang === 'en' ? 'en' : 'zh');
+      showToast(
+        lang === 'en' && htmlToPlainText(zhSide.html).length >= 80
+          ? '英文版还是空的：先点「母语化重写 → 英文」翻出来，再生成英文摘要'
+          : '正文太短了，写点内容再生成摘要',
+        'error'
+      );
+      return;
+    }
+    // 页签停在英文、正文却是中文：这时候问模型要「英文摘要」，它会顺着正文语言
+    // 吐一段中文回来，写进 excerpt 就是前台挂一段中文。直接指路，别浪费一次调用。
+    if (lang === 'en' && isMostlyChinese(bodyText)) {
+      showToast('这段正文是中文：中文摘要请切到「中文原稿」页签，英文摘要等翻译完再生成', 'error');
       return;
     }
     setExtractingExcerpt(true);
@@ -369,14 +409,36 @@ function EditorContentComponent() {
       const resp = await fetch('/api/ai/excerpt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ language: lang, title: lang === 'zh' ? titleZh : title, html: bodyHtml }),
+        body: JSON.stringify({
+          language: lang,
+          title: lang === 'zh' ? titleZh : title,
+          html: bodyHtml,
+          // 上一次是复用出来的 → 这一下点「再生成一次」就该真的重新问模型（见下面的提示）
+          fresh: excerptFreshRef.current,
+        }),
       });
       const json = await resp.json().catch(() => ({}));
-      if (!resp.ok || !json?.ok) throw new Error(json?.error || `生成摘要失败（${resp.status}）`);
+      if (!resp.ok || !json?.ok) {
+        // 模型类故障给个去处：右侧「AI 自检」能把「谁挂了、哪把 Key 缺了」摊开
+        const hint = ['rate', 'quota', 'auth', 'notfound'].includes(String(json?.kind || ''))
+          ? '\n（右侧「AI 自检」可以直接查是哪个模型 / 哪把 Key 的问题）'
+          : '';
+        throw new Error(`${json?.error || `生成摘要失败（${resp.status}）`}${hint}`);
+      }
       const text = String(json.data?.excerpt || '');
       if (lang === 'zh') setExcerptZh(text);
       else setExcerpt(text);
-      showToast(lang === 'zh' ? '中文摘要已生成' : '英文摘要已生成', 'success');
+      // 后端 5 分钟内问过同一段正文时会直接复用（省额度），得说清楚 —— 否则站长会觉得「点了没反应」
+      const reused = json.data?.cached === true;
+      excerptFreshRef.current = reused;
+      showToast(
+        reused
+          ? '5 分钟内刚生成过同一段正文，这次直接复用了上次的结果（省额度）。\n再点一次「生成摘要」就会真的重新生成。'
+          : lang === 'zh'
+            ? '中文摘要已生成'
+            : '英文摘要已生成',
+        reused ? 'info' : 'success'
+      );
     } catch (e: any) {
       showToast(e?.message || '生成摘要失败', 'error');
     } finally {
@@ -389,9 +451,21 @@ function EditorContentComponent() {
   /** 当前页签的正文 HTML */
   const getActiveBody = () => editor?.getHTML() || '';
   /** 英文正文（不管现在停在哪个页签） */
-  const getEnBody = () => (lang === 'en' ? getActiveBody() : enHtmlRef.current);
+  const getEnBody = (activeLang: 'zh' | 'en' = lang) =>
+    activeLang === 'en' ? getActiveBody() : enHtmlRef.current;
+
+  /**
+   * 「中文原稿」到底在哪一边 —— 真正的判断在 lib/storyPrompt 的 pickChineseOriginal 里
+   * （纯函数，好测）。这里只负责告诉它「正经位置」和「另一边」分别是哪个输入框。
+   */
+  const pickZhCandidate = (activeLang: 'zh' | 'en' = lang) =>
+    pickChineseOriginal({
+      official: activeLang === 'zh' ? getActiveBody() : zhHtmlRef.current,
+      others: activeLang === 'zh' ? [enHtmlRef.current] : [getActiveBody(), enHtmlRef.current],
+    });
+
   /** 中文正文（不管现在停在哪个页签） */
-  const getZhBody = () => (lang === 'zh' ? getActiveBody() : zhHtmlRef.current);
+  const getZhBody = () => pickZhCandidate().html;
   /** 给「接着写下去」用：当前中文正文的纯文本 */
   const getCurrentZhText = () => htmlToPlainText(getZhBody());
 
@@ -409,54 +483,148 @@ function EditorContentComponent() {
     editor.commands.setContent(next === 'zh' ? zhHtmlRef.current : enHtmlRef.current);
   };
 
-  // 🌐 母语化重写：把中文原稿变成「像英语作家直接写的」英文版
-  const handleTranslate = async () => {
-    if (!editor) return;
-    const zhBody = getZhBody();
-    const zhText = htmlToPlainText(zhBody);
-    if (zhText.length < 80) {
-      showToast('中文正文太短了，先写完再翻译', 'error');
-      return;
-    }
-    const alreadyHasEn = Boolean(title.trim()) || htmlToPlainText(getEnBody()).length > 80;
-    if (alreadyHasEn && !window.confirm('翻译会用新的英文版覆盖现有的英文标题 / 摘要 / 正文。要继续吗？')) return;
-    if (lang === 'zh') zhHtmlRef.current = editor.getHTML();
-
-    setTranslating(true);
-    try {
+  /**
+   * 把「一段中文」送去翻译，失败自动重试一次。
+   *
+   * 单独抽出来是因为分批翻译要在循环里调用它 N 次；每次都要现取登录票
+   * （一张票撑不完十分钟，长文翻到第五段时旧票早过期了）。
+   *
+   * 429 也纳入重试 —— 但必须按对面说的等：
+   *   以前只认 502/503/504，于是「这一分钟点得太密」这种**等 20 秒就好**的情况
+   *   直接甩给站长自己重试；反过来说，后端把 429 的宽度当成 502 又不对。
+   *   现在后端会在 body 里带 retryAfterMs（有上限），这里据此等一次：
+   *     · retryAfterMs ≤ 8 秒 → 等它，然后重发（多数情况这一下就成了）
+   *     · 更长（每日额度用尽之类）→ 不等，立刻把话递给站长，别白转 20 秒圈
+   */
+  const translatePart = async (payload: Record<string, unknown>) => {
+    const send = async () => {
       const token = await getFreshAccessToken();
       if (!token) throw new Error('登录状态失效，请刷新页面');
       const resp = await fetch('/api/ai/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          title: titleZh.trim() || zhText.slice(0, 30),
-          excerpt: excerptZh,
-          html: zhBody,
-          length: countChineseChars(zhText),
-        }),
+        body: JSON.stringify(payload),
       });
       const json = await resp.json().catch(() => ({}));
-      if (!resp.ok || !json?.ok) throw new Error(json?.error || `翻译失败（${resp.status}）`);
-      const d = json.data || {};
-      const enHtml = String(d.html || '');
+      return { resp, json };
+    };
+
+    let { resp, json } = await send();
+    // 502/503/504 是「这次没成」而不是「你不该这么做」——换张票再来一次
+    const askedWaitMs = Number((json as any)?.retryAfterMs) || 0;
+    const worthRetrying =
+      [502, 503, 504].includes(resp.status) || (resp.status === 429 && askedWaitMs > 0 && askedWaitMs <= 8000);
+    if (!resp.ok && worthRetrying) {
+      const waitMs = askedWaitMs > 0 && askedWaitMs <= 8000 ? askedWaitMs : 800;
+      if (waitMs > 1200) setTranslateStep(`被模型限流了，${Math.ceil(waitMs / 1000)} 秒后自动重试这一段…`);
+      await new Promise((r) => setTimeout(r, waitMs));
+      ({ resp, json } = await send());
+    }
+    if (!resp.ok || !json?.ok) throw new Error(json?.error || `翻译失败（${resp.status}）`);
+    return (json.data || {}) as Record<string, any>;
+  };
+
+  // 🌐 母语化重写：把中文原稿变成「像英语作家直接写的」英文版
+  //
+  // 长文必须分批翻：整篇一次性翻的时候，一篇 3000 字的中文会同时撞上
+  // 「模型单次输出上限」和「路由 60 秒超时」，站长看到的就是「翻译不了」。
+  // 现在按段落切成 900 字一段，一段一次请求 —— 长文照样翻得完，还能显示翻到第几段。
+  const handleTranslate = async (opts?: { activeLang?: 'zh' | 'en' }) => {
+    if (!editor) return;
+    // activeLang：给「发布护栏 → 先去翻译」那颗按钮用的。它先 switchLang('zh') 再调
+    // 这里，而 setLang 是异步的，这一帧闭包里读到的 lang 还是旧值（'en'），
+    // 于是「中文原稿在哪一边」会判断错。
+    const active = opts?.activeLang || lang;
+    const picked = pickZhCandidate(active);
+    const zhBody = picked.html;
+    const zhText = htmlToPlainText(zhBody);
+    if (zhText.length < 80) {
+      // 说清楚该去哪儿写：以前只丢一句「太短了」，站长对着满屏中文根本摸不着头脑
+      showToast('中文原稿还是空的：先切到「中文原稿」页签写完正文，再回来翻译', 'error');
+      return;
+    }
+    // 中文是从英文页签那边捡回来的（页签错位）：先放回中文原稿。
+    // 不放回去的话，保存时它会被当成英文版写进 content_html，中文原稿那一栏永远是空的。
+    if (picked.recovered) {
+      zhHtmlRef.current = zhBody;
+      setZhReady(true);
+      if (active === 'zh') editor.commands.setContent(zhBody);
+      showToast('检测到中文正文停在英文页签里，已先放回「中文原稿」', 'success');
+    }
+    const alreadyHasEn = Boolean(title.trim()) || htmlToPlainText(getEnBody(active)).length > 80;
+    if (alreadyHasEn && !window.confirm('翻译会用新的英文版覆盖现有的英文标题 / 摘要 / 正文。要继续吗？')) return;
+    // 中文原稿统一以刚才挑好的这一份为准（原来是「停在中文页签就从编辑器抓一份」）
+    zhHtmlRef.current = zhBody;
+
+    const chunks = splitTranslationChunks(zhText, TRANSLATE_CHUNK_CHARS);
+    const total = Math.max(1, chunks.length);
+
+    setTranslating(true);
+    setTranslateStep('');
+    try {
+      let enTitle = '';
+      let enExcerpt = '';
+      /** 名词对照表：第 1 段的产物，后面每一段都要带上，否则同一个角色会翻成两个名字 */
+      let glossary = '';
+      const enBodies: string[] = [];
+      const warnings: string[] = [];
+
+      for (let i = 0; i < total; i++) {
+        const part = i + 1;
+        // 只有多段才显示进度 —— 单段就是一次普通翻译，别多给一行噪音
+        if (total > 1) setTranslateStep(`正在翻译第 ${part}/${total} 段…`);
+        const data = await translatePart({
+          title: titleZh.trim() || zhText.slice(0, 30),
+          excerpt: excerptZh,
+          // 多段时只发这一段；单段沿用老路子（整篇 HTML 一起发）
+          ...(total > 1 ? {} : { html: zhBody }),
+          fullText: zhText.slice(0, 20000),
+          text: chunks[i],
+          part,
+          parts: total,
+          // 上一段英文的尾巴：让它从断掉的地方接上，而不是自己另起一段
+          prevTail: htmlToPlainText(enBodies.join('\n')).slice(-400),
+          glossary,
+        });
+        if (data.title) enTitle = String(data.title);
+        if (data.excerpt) enExcerpt = String(data.excerpt);
+        if (data.glossary) glossary = String(data.glossary);
+        if (data.html) enBodies.push(String(data.html));
+        if (Array.isArray(data.warnings)) warnings.push(...data.warnings.map(String));
+        // 每一段都写回编辑器：万一第 4 段失败，前 3 段已经能看到，不用从头再来
+        if (total > 1) {
+          const partial = enBodies.join('\n');
+          enHtmlRef.current = partial;
+          if (active === 'en') editor.commands.setContent(partial);
+        }
+      }
+
+      const enHtml = enBodies.join('\n');
+      if (!enHtml.trim()) throw new Error('没有拿到英文正文，请重试一次');
+
       enHtmlRef.current = enHtml;
-      setTitle(String(d.title || ''));
-      setExcerpt(String(d.excerpt || ''));
+      if (enTitle) setTitle(enTitle);
+      if (enExcerpt) setExcerpt(enExcerpt);
       setTranslatedAt(new Date().toISOString());
       setLang('en');
       editor.commands.setContent(enHtml);
       // 中文标题生成的网址是一串横杠 —— 既然有了英文标题，顺手把网址修好
       if (!isUsableSlug(slug)) {
-        const fixed = buildArticleSlug(String(d.title || ''));
+        const fixed = buildArticleSlug(enTitle || title);
         if (fixed) setSlug(fixed);
       }
-      if (Array.isArray(d.warnings)) d.warnings.forEach((w: string) => showToast(w, 'error'));
-      showToast('英文版已就绪 —— 记得点右上角「保存」', 'success');
+      warnings.forEach((w) => showToast(w, 'error'));
+      showToast(
+        total > 1
+          ? `英文版已就绪（中文 ${countChineseChars(zhText)} 字，分 ${total} 段翻完）—— 记得点右上角「保存」`
+          : '英文版已就绪 —— 记得点右上角「保存」',
+        'success'
+      );
     } catch (e: any) {
       showToast(e?.message || '翻译失败', 'error');
     } finally {
       setTranslating(false);
+      setTranslateStep('');
     }
   };
 
@@ -489,11 +657,19 @@ function EditorContentComponent() {
     setZhReady(true);
   };
 
+  /** 骰子：随机换一个编辑身份（避开当前这个，免得连抽两次是同一个人） */
   const randomizeAuthor = () => {
-    const randomIdx = Math.floor(Math.random() * INITIAL_EDITORS.length);
-    setAuthorName(INITIAL_EDITORS[randomIdx].name);
-    setAuthorAvatar(INITIAL_EDITORS[randomIdx].avatar);
-    showToast("已随机切换编辑身份", "success");
+    const next = randomEditorPersona(authorName);
+    setAuthorName(next.name);
+    setAuthorAvatar(next.avatar);
+    showToast(`已随机切换编辑身份：${next.name} · ${next.role}`, "success");
+  };
+
+  /** 从 20 组名册里点选一组（名字 + 头像一起换，保持搭配） */
+  const applyPersona = (persona: EditorPersona) => {
+    setAuthorName(persona.name);
+    setAuthorAvatar(persona.avatar);
+    showToast(`发布身份：${persona.name} · ${persona.role}`, "success");
   };
 
   const toggleCat = (cat: string) => {
@@ -526,6 +702,52 @@ function EditorContentComponent() {
     } catch (e: any) {
       setAvailableCats(previous);
       showToast(e?.message || '保存顺序失败', 'error');
+    }
+  };
+
+  /**
+   * 从话题矩阵里删掉一个话题。
+   *
+   * 删话题不只是删掉 `categories` 里那一行 —— 前台页签是按文章的 `category`
+   * 现算的，所以服务端会**先把这个话题名下的文章并进兜底话题「Other」，
+   * 再删话题本身**（见 app/api/admin/categories/delete/route.ts）。
+   * 不这么做，文章会留着一个没人认识的值，前台照样多出一个页签。
+   *
+   * 顺序与拖动排序一致：先改界面给反馈，落库失败就把话题放回原位。
+   */
+  const removeCat = async (cat: string) => {
+    const confirmed = window.confirm(
+      `删除话题「${cat}」后，它名下的文章会自动并进「Other」（前台 Other 页签）。确定删除吗？`
+    );
+    if (!confirmed) return;
+
+    const previousCats = availableCats;
+    const previousSelected = selectedCats;
+    setAvailableCats(prev => prev.filter(c => c !== cat));
+    setSelectedCats(prev => prev.filter(c => c !== cat));
+
+    try {
+      const token = await getFreshAccessToken();
+      if (!token) throw new Error('登录状态失效，请刷新页面重新登录');
+      const resp = await fetch('/api/admin/categories/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name: cat }),
+      });
+      const json = await resp.json().catch(() => ({}));
+      if (!resp.ok || !json?.ok) throw new Error(json?.error || `删除话题失败（${resp.status}）`);
+      const moved = Number(json?.moved) || 0;
+      // 前台 /briefs 是 ISR（revalidate = 60），最多等一分钟
+      showToast(
+        moved > 0
+          ? `已删除「${cat}」，${moved} 篇文章已并进「Other」—— 前台最多一分钟后更新`
+          : `已删除「${cat}」`,
+        'success'
+      );
+    } catch (e: any) {
+      setAvailableCats(previousCats);
+      setSelectedCats(previousSelected);
+      showToast(e?.message || '删除话题失败', 'error');
     }
   };
 
@@ -719,9 +941,13 @@ function EditorContentComponent() {
         </div>
       </nav>
 
-      {/* 浮动通知 */}
+      {/* 浮动通知 —— 错误可能是一整句话（「哪个模型被限流、多久恢复」），
+          所以给它一个最大宽度并允许换行；点一下就能收掉，不用干等它自己消失 */}
       {notice && (
-        <div className={`fixed top-24 left-1/2 -translate-x-1/2 z-[100] px-8 py-4 rounded-3xl shadow-2xl font-black text-[10px] uppercase tracking-widest animate-in fade-in slide-in-from-top-4 ${notice.type === 'success' ? 'bg-slate-900 text-white' : 'bg-rose-500 text-white'}`}>
+        <div
+          onClick={() => setNotice(null)}
+          className={`fixed top-24 left-1/2 -translate-x-1/2 z-[100] px-7 py-4 rounded-3xl shadow-2xl font-black text-[11px] leading-relaxed tracking-normal whitespace-pre-line text-center max-w-[min(560px,92vw)] break-words cursor-pointer animate-in fade-in slide-in-from-top-4 ${notice.type === 'success' ? 'bg-slate-900 text-white' : notice.type === 'info' ? 'bg-amber-500 text-white' : 'bg-rose-500 text-white'}`}
+        >
           {notice.msg}
         </div>
       )}
@@ -756,14 +982,14 @@ function EditorContentComponent() {
 
       <button
         type="button"
-        onClick={handleTranslate}
+        onClick={() => handleTranslate()}
         disabled={translating}
         className={`h-10 px-5 rounded-2xl text-[10px] font-black uppercase tracking-wider flex items-center gap-2 transition-all ${
           translating ? 'bg-slate-100 text-slate-400' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
         }`}
       >
         {translating ? <Loader2 size={13} className="animate-spin" /> : <Languages size={13} />}
-        {translating ? '母语化重写中…' : hasEn ? '重新翻译成英文' : '母语化重写 → 英文'}
+        {translating ? (translateStep || '母语化重写中…') : hasEn ? '重新翻译成英文' : '母语化重写 → 英文'}
       </button>
     </div>
 
@@ -880,6 +1106,8 @@ function EditorContentComponent() {
 
         {/* 右侧：配置看板 */}
         <aside className="lg:col-span-4 space-y-8">
+          {/* 🩺 AI 自检：平时收起成一行；AI 报错时点开就能看见「谁挂了、哪把 Key 缺了」 */}
+          <AiHealthCard />
           {/* 发布策略中心 */}
           <section className="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm transition-all hover:shadow-md">
             <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-400 mb-6 italic flex items-center gap-2 text-left">发布策略 (Strategy) <Clock size={14}/></h3>
@@ -971,14 +1199,12 @@ function EditorContentComponent() {
                     >
                       <span>{cat}</span>
                     </button>
-                    {isEditingCats && (
+                    {/* 兜底话题「Other」不给删：其他话题的文章都要并进它
+                        （服务端 app/api/admin/categories/delete 也会拦一道） */}
+                    {isEditingCats && cat.toLowerCase() !== 'other' && (
                       <button 
                         type="button"
-                        onClick={async () => {
-                          await supabase.from('categories').delete().eq('name', cat);
-                          setAvailableCats(prev => prev.filter(c => c !== cat));
-                          setSelectedCats(prev => prev.filter(c => c !== cat));
-                        }} 
+                        onClick={() => void removeCat(cat)} 
                         className="absolute -top-1 -right-1 w-5 h-5 bg-rose-500 text-white rounded-full flex items-center justify-center shadow-lg hover:scale-110 z-10"
                       >
                         <Minus size={10}/>
@@ -1057,15 +1283,61 @@ function EditorContentComponent() {
           <section className="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm">
              <div className="flex justify-between items-center mb-8">
                <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-400 italic text-left">发布身份</h3>
-               <button type="button" onClick={randomizeAuthor} className="p-2 bg-indigo-50 text-indigo-600 rounded-xl hover:rotate-180 transition-all duration-500"><Dice5 size={18} /></button>
+               <div className="flex items-center gap-2">
+                 <button
+                   type="button"
+                   onClick={() => setAuthorPickerOpen((v) => !v)}
+                   className={`px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${
+                     authorPickerOpen ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                   }`}
+                 >
+                   {authorPickerOpen ? '收起' : `名册 ${EDITOR_PERSONAS.length}`}
+                 </button>
+                 <button type="button" onClick={randomizeAuthor} title="随机换一个编辑身份" className="p-2 bg-indigo-50 text-indigo-600 rounded-xl hover:rotate-180 transition-all duration-500"><Dice5 size={18} /></button>
+               </div>
              </div>
              <div className="flex items-center gap-5 p-6 bg-slate-50 rounded-[32px] border border-slate-100 text-left">
-                <img src={authorAvatar} className="w-16 h-16 rounded-full border-4 border-white shadow-lg bg-white" alt="avatar" />
+                <img src={authorAvatar} className="w-16 h-16 rounded-full border-4 border-white shadow-lg bg-white object-cover" alt="avatar" />
                 <div className="flex-1 overflow-hidden">
-                   <p className="font-black text-slate-900 text-sm truncate">{authorName}</p>
+                   <input
+                     value={authorName}
+                     onChange={(e) => setAuthorName(e.target.value)}
+                     placeholder="署名"
+                     className="w-full bg-transparent font-black text-slate-900 text-sm truncate outline-none border-b border-transparent focus:border-indigo-200 transition-all"
+                   />
                    <p className="text-[8px] font-black text-indigo-500 uppercase tracking-widest mt-1 italic">Verified Partner</p>
                 </div>
              </div>
+
+             {authorPickerOpen && (
+               <div className="mt-4 space-y-3">
+                 <p className="text-[9px] font-bold text-slate-400 leading-relaxed text-left">
+                   名字和头像是配套的：点一组就整组换过来，也可以直接改上面那行署名。
+                 </p>
+                 <div className="max-h-72 overflow-y-auto grid grid-cols-2 gap-2 pr-1">
+                   {EDITOR_PERSONAS.map((persona) => {
+                     const active = authorName.trim().toLowerCase() === persona.name.toLowerCase();
+                     return (
+                       <button
+                         key={persona.name}
+                         type="button"
+                         onClick={() => applyPersona(persona)}
+                         title={persona.role}
+                         className={`flex items-center gap-3 p-3 rounded-2xl border text-left transition-all ${
+                           active ? 'border-indigo-300 bg-indigo-50' : 'border-slate-100 bg-white hover:border-slate-300'
+                         }`}
+                       >
+                         <img src={persona.avatar} alt="" className="w-9 h-9 rounded-full bg-slate-100 shrink-0" />
+                         <span className="min-w-0">
+                           <span className="block text-[11px] font-black text-slate-800 truncate">{persona.name}</span>
+                           <span className="block text-[8px] font-bold text-slate-400 uppercase tracking-wider truncate">{persona.role}</span>
+                         </span>
+                       </button>
+                     );
+                   })}
+                 </div>
+               </div>
+             )}
           </section>
         </aside>
       </div>
@@ -1089,7 +1361,7 @@ function EditorContentComponent() {
             <div className="flex flex-col gap-2">
               <button
                 type="button"
-                onClick={() => { setPublishGuard(false); switchLang('zh'); handleTranslate(); }}
+                onClick={() => { setPublishGuard(false); switchLang('zh'); handleTranslate({ activeLang: 'zh' }); }}
                 className="h-14 rounded-2xl bg-slate-900 text-white font-black text-[11px] uppercase tracking-widest hover:scale-[1.01] active:scale-95 transition-all flex items-center justify-center gap-2"
               >
                 <Languages size={15} /> 先去翻译（推荐）

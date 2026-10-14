@@ -13,15 +13,11 @@ import {
   publishedAtOf,
   publishDueRows,
 } from '@/lib/scheduled'
+// 发布身份只用一份名册（20 组欧美编辑名 + 头像），和编辑页共用，见 lib/editors.ts
+import { EDITOR_PERSONAS } from '@/lib/editors'
 
 // --- 🚀 1. 核心配置 ---
 const MASTER_CATEGORIES = ['Entertainment', 'Leisure', 'Emotion', 'Tech', 'Learning', 'Travel', 'AI', 'Animals', 'Home Decor', 'Gaming'];
-const EDITORS = [
-  { name: 'Dalin Lu', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Dalin' },
-  { name: 'Nexus AI', avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=Nexus' },
-  { name: 'Alex Rivera', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alex' },
-  { name: 'Elena Rod', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Elena' }
-];
 
 // --- 🚀 1.1 列表列定义 ---
 // RICH 依赖阶段 0 的 SQL（10_schema.sql）新增的字段；BASE 是永远存在的保底列。
@@ -171,7 +167,7 @@ export default function TrendsManagementHub() {
     setBusy(true);
     try {
       const selectedCats = [...MASTER_CATEGORIES].sort(() => Math.random() - 0.5).slice(0, 3);
-      const selectedAuthors = [...EDITORS].sort(() => Math.random() - 0.5).slice(0, 3);
+      const selectedAuthors = [...EDITOR_PERSONAS].sort(() => Math.random() - 0.5).slice(0, 3);
       
       const payload = selectedCats.map((cat, idx) => {
         const author = selectedAuthors[idx];

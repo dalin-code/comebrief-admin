@@ -1,12 +1,13 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { 
   Zap, BrainCircuit, ShieldCheck, 
-  LayoutDashboard, Settings, LogOut, Megaphone, Tags, PenTool 
+  LayoutDashboard, Settings, LogOut, Megaphone, Tags, PenTool, Loader2 
 } from "lucide-react";
+import { signOutAndRedirect } from "@/lib/clientAuth";
 
 const MENU_ITEMS = [
   { title: "数据概览", path: "/admin", icon: <LayoutDashboard size={18} /> },
@@ -21,6 +22,29 @@ const MENU_ITEMS = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  /**
+   * 退出登录。
+   *
+   * 这个按钮以前是「纯装饰」—— 只有图标和文字、没有 onClick，点了什么都不发生，
+   * 站长自然以为它坏了。现在接上 lib/clientAuth 的 signOutAndRedirect：
+   * 先正常登出 → 失败就只清本地票 → 最后**硬跳转**回 /admin/login。
+   *
+   * 为什么要二次确认：它就贴在侧边栏底部，平时扫菜单很容易手滑点到，
+   * 而退出的代价是「这次没保存的稿子白写」。
+   */
+  const doSignOut = async () => {
+    setBusy(true);
+    setError("");
+    const reason = await signOutAndRedirect();
+    // 正常情况这里已经跳走了。能走到这行说明没跳成 —— 把原因留在屏幕上，
+    // 别让站长对着一个「点了没反应」的按钮发呆。
+    if (reason) setError(`已清掉本地登录态，但没能通知服务器（${reason}）。若页面没跳转，手动刷新一次即可。`);
+    setBusy(false);
+  };
 
   return (
     <aside className="w-64 border-r border-slate-100 bg-white flex flex-col h-screen sticky top-0 z-20">
@@ -49,10 +73,41 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="p-8 border-t border-slate-50">
-        <button className="flex items-center gap-2 text-rose-400 text-[10px] font-black uppercase tracking-widest hover:text-rose-600 transition-all">
-          <LogOut size={14} /> 退出系统
-        </button>
+      <div className="p-8 border-t border-slate-50 space-y-3">
+        {confirming ? (
+          <div className="space-y-3">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+              确定退出登录？
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={doSignOut}
+                disabled={busy}
+                className="flex-1 h-9 rounded-xl bg-rose-500 text-white text-[10px] font-black uppercase tracking-widest hover:bg-rose-600 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+              >
+                {busy ? <Loader2 size={12} className="animate-spin" /> : <LogOut size={12} />} 退出
+              </button>
+              <button
+                type="button"
+                onClick={() => { setConfirming(false); setError(""); }}
+                disabled={busy}
+                className="flex-1 h-9 rounded-xl border border-slate-200 text-slate-500 text-[10px] font-black uppercase tracking-widest hover:bg-slate-50 disabled:opacity-50 transition-all"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            className="flex items-center gap-2 text-rose-400 text-[10px] font-black uppercase tracking-widest hover:text-rose-600 transition-all"
+          >
+            <LogOut size={14} /> 退出系统
+          </button>
+        )}
+        {error ? <p className="text-[9px] font-bold text-rose-400 leading-relaxed">{error}</p> : null}
       </div>
     </aside>
   );

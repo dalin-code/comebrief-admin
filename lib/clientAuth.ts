@@ -74,3 +74,47 @@ export const anonStorageClient = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'public-anon-key',
   { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } }
 )
+
+/**
+ * 「退出系统」。
+ *
+ * 为什么不能只写一句 `await supabase.auth.signOut()` 就完事：
+ *   ① 它是**网络请求**（要通知 GoTrue 把 refresh_token 作废）。断网、Supabase 抽风、
+ *      或者被浏览器掐掉时，它会抛错 —— 站长点了退出却什么都没发生，看起来就是
+ *      「按钮坏了」（真实反馈）。
+ *   ② 就算登出成功，「页面没走」也是常见结果：登录守卫写在客户端 layout
+ *      （app/admin/layout.tsx 的 getSession）里，靠 Next 的软跳转不会可靠地重跑那套
+ *      判断 —— 于是站长还站在后台里，只是「名义上登出了」。最后一步必须硬跳转。
+ *
+ * 三步走，每一步都往下兜 —— 保证「一定退得掉、一定跳得走」：
+ *   1. signOut()                 正常路径：清本地票 + 通知服务端作废
+ *   2. signOut({ scope: 'local' }) 上一步失败时，至少把本地这张票扔掉
+ *      （不然守卫下次 getSession 还是拿到 session，还是认为你登录着）
+ *   3. window.location.href = /admin/login  无论前面成没成都回登录页；带 redirect 记住
+ *      你刚才在哪，登录成功后能回到原处
+ *
+ * 返回值：'' 表示退出流程正常；非空是「没能通知服务器」的原因（页面照样会跳走）。
+ * 之所以要返回而不是抛异常：调用方（Sidebar）要在屏幕上留一句话，不能静默失败。
+ */
+export async function signOutAndRedirect(): Promise<string> {
+  const here = typeof window !== 'undefined' ? window.location.pathname + window.location.search : ''
+  // 已经站在登录页时不要把 /admin/login 塞进 redirect，否则登录成功又会被送回登录页
+  const back = here && !here.startsWith('/admin/login') ? here : '/admin'
+  let reason = ''
+  try {
+    const { error } = await supabase.auth.signOut()
+    if (error) throw error
+  } catch (e: any) {
+    reason = e?.message || '退出请求失败'
+    console.warn('[auth] 退出请求失败，改为只清本地登录态：', reason)
+    try {
+      await supabase.auth.signOut({ scope: 'local' })
+    } catch (e2: any) {
+      console.warn('[auth] 本地清票也失败了，仍然跳登录页：', e2?.message || e2)
+    }
+  }
+  if (typeof window !== 'undefined') {
+    window.location.href = `/admin/login?redirect=${encodeURIComponent(back)}`
+  }
+  return reason
+}
