@@ -12,7 +12,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    // suppressHydrationWarning：浏览器扩展（如 TokenPocket / 各类钱包、翻译插件）
+    // 会在 React 加载前往 <html> 上塞自己的属性（data-tp-bcm-channel-* 等），
+    // 造成「服务端 HTML 与客户端属性不一致」的 hydration 报错。这个属性只作用于
+    // 该标签自身这一层，不会掩盖子树的真实问题。
+    <html lang="en" suppressHydrationWarning>
       <body>
         {children}
       </body>
