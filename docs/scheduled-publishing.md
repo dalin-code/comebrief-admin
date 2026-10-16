@@ -55,10 +55,39 @@ curl -H "Authorization: Bearer $CRON_SECRET" \
 
 ```
 CRON_SECRET=<随机长字符串>
+SUPABASE_SERVICE_ROLE_KEY=<Supabase 的 service_role key>
 ```
 
 没配 `CRON_SECRET` 时，生产环境访问该路由会直接返回 **503**（避免出现一个裸奔的公开写接口）；
 开发环境则放行，方便本地调试。
+
+`SUPABASE_SERVICE_ROLE_KEY` 同样不能少：cron 引擎走的是 `getSupabaseAdminClient()`
+（这条链路没有请求者身份可以退，和后台写接口不一样），缺它时 `/api/cron/publish` 只会 500，
+一篇也翻不了。
+
+> 线上实测（2026-10-16）：admin 这个 Vercel 项目**只配了 URL 和 anon key**，
+> `SUPABASE_SERVICE_ROLE_KEY` / `CRON_SECRET` 都没配 —— 于是「到点自动翻正」这条路
+> 从来没有跑通过，定时稿一直停在 `status = 'scheduled'` + `published_at = NULL`，
+> 直到站长打开一次后台触发第一层自愈。
+>
+> 后台的话题排序 / 删话题接口已经不再受这个变量影响：它们改走
+> `lib/supabaseAdmin.ts#getSupabaseWriteClient()` —— 有 service role key 就用它，
+> 没有就退回站长那张登录票（`Authorization: Bearer <token>`，身份与浏览器直写等价），
+> 并按「回读行数」校验写入真的生效。
+> 但 cron 没有登录票可退，所以这一项仍然必配。
+
+### 这两个变量没配时，前台表现如何（2026-10-16 起）
+
+到点但还没被翻正的定时稿，`published_at` 仍是 NULL —— 前台已经不会再出现「到点了
+首页什么都没有」，取数与渲染各兜了一层：
+
+| 位置 | 处理 |
+|---|---|
+| 首页 / `/briefs` 取数 | `ComeBrief/lib/feed.ts#fetchVisibleArticles()`：除「已发布 + 按 `published_at` 倒序」外，再取一条「`status='scheduled'` 且 `scheduled_at <= now()`」的窗口合并进来 —— 否则这类行 `published_at` 为 NULL，会排在全部已发布内容后面被 `limit` 直接切掉（首页 limit 是 24，必现） |
+| 卡片 / hero 上的日期 | `ComeBrief/lib/utils.ts#articleDate()`：`published_at` 为 NULL 时退到 `scheduled_at`，不再渲染成空白 |
+
+也就是说「定时到点读者能不能看到」不再依赖调度器；调度器仍然决定
+`published_at` 与后台列表里的状态是否被真正翻正。
 
 ## 触发方式（三选一）
 

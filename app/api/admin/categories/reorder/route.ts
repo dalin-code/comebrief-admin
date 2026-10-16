@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server'
-import { getSupabaseAdminClient } from '@/lib/supabaseAdmin'
-import { jsonResponse, requireAdmin } from '@/lib/aiGemini'
+import { getSupabaseWriteClient } from '@/lib/supabaseAdmin'
+import { getBearer, jsonResponse, requireAdmin } from '@/lib/aiGemini'
 
 export const runtime = 'nodejs'
 
@@ -24,6 +24,15 @@ const ORDER_EPOCH = Date.parse('2020-01-01T00:00:00.000Z')
  *   实测匿名键 PATCH 这张表是 **200 但 0 行受影响**（RLS 静默拦下），
  *   服务端拿 service role 才是确定能写的那条路。
  *
+ *   但线上（2026-10-16 实测）admin 这个 Vercel 项目**没有配
+ *   `SUPABASE_SERVICE_ROLE_KEY`** —— 于是这里直接 500「missing env ...」，
+ *   站长在话题矩阵里拖一下标签就弹这句，顺序永远存不上。所以写库凭据改成
+ *   走 `getSupabaseWriteClient()`：**有 service role 就用它，没有就退回这张
+ *   请求里的登录票**（身份与站长在浏览器里手动改这张表完全等价，
+ *   数据库给 authenticated 放行了，见 ComeBrief/supabase/20_visibility.sql 第 6 节）。
+ *   另外每一条写入都带 `.select()` 回读 —— RLS 拦下的 UPDATE 是
+ *   「200 但 0 行受影响」，不校验就会把「一个字都没写进去」当成功报给站长。
+ *
  * 基准取一个固定纪元（2020-01-01T00:00:00Z + i 秒），不是「现在」：
  *   · 整组拖过的标签都排在**任何**还没被拖过的行前面（那些行的 created_at
  *     是真实的建表时间，2026 年以后），只拖了一部分时队形也不会乱；
@@ -34,10 +43,12 @@ export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req)
   if (auth.ok === false) return auth.response
 
-  const admin = getSupabaseAdminClient()
-  if (!admin.ok) {
-    return jsonResponse({ error: admin.error || 'missing env: SUPABASE_SERVICE_ROLE_KEY' }, 500)
+  const write = getSupabaseWriteClient(getBearer(req))
+  if (!write.ok) {
+    console.log('[categories:reorder] 没有可用的写库凭据', write.env)
+    return jsonResponse({ error: write.error || 'missing env', env: write.env }, 500)
   }
+  const client = write.client
 
   let body: any = null
   try {
@@ -61,41 +72,63 @@ export async function POST(req: NextRequest) {
   }
   if (order.length === 0) return jsonResponse({ error: 'order 里没有有效名字' }, 400)
 
-  const { data: existing, error: readError } = await admin.client.from('categories').select('name')
+  const { data: existing, error: readError } = await client.from('categories').select('name')
   if (readError) {
     console.log('[categories:reorder] 读现有话题失败 ——', readError.message)
-    return jsonResponse({ error: readError.message }, 500)
+    return jsonResponse({ error: readError.message, via: write.via }, 500)
   }
   const known = new Set((existing || []).map((row: any) => String(row?.name || '')))
 
   const base = ORDER_EPOCH
   const applied: string[] = []
   const failed: string[] = []
+  /** 每条失败的原因（含「0 行受影响」这种没有 error 对象的情况） */
+  const reasons: string[] = []
 
   for (let i = 0; i < order.length; i++) {
     const name = order[i]
     const createdAt = new Date(base + i * 1000).toISOString()
     if (known.has(name)) {
-      const { error } = await admin.client.from('categories').update({ created_at: createdAt }).eq('name', name)
-      if (error) failed.push(name)
-      else applied.push(name)
+      // `.select()` 不能省：RLS 拦下的 UPDATE 是「200 但 0 行受影响」，
+      // 不回读就分不清「排好了」和「一个字都没写进去」。
+      const { data, error } = await client
+        .from('categories')
+        .update({ created_at: createdAt })
+        .eq('name', name)
+        .select('name')
+      if (error || !data || data.length === 0) {
+        failed.push(name)
+        reasons.push(`${name}：${error?.message || '0 行受影响（写权限被 RLS 拦下了）'}`)
+      } else applied.push(name)
     } else {
       // 台上刚敲出来、还没随稿子保存的新话题：顺手落库，位置才守得住
       // （否则它会在保存时以 created_at = now() 落进队尾，把站长刚排好的顺序顶掉）
-      const { error } = await admin.client.from('categories').insert([{ name, created_at: createdAt }])
-      if (error) failed.push(name)
-      else applied.push(name)
+      const { data, error } = await client
+        .from('categories')
+        .insert([{ name, created_at: createdAt }])
+        .select('name')
+      if (error || !data || data.length === 0) {
+        failed.push(name)
+        reasons.push(`${name}：${error?.message || '0 行写入（写权限被 RLS 拦下了）'}`)
+      } else applied.push(name)
     }
   }
 
   if (failed.length > 0) {
-    console.log('[categories:reorder] 失败', failed)
+    console.log('[categories:reorder] 失败', { via: write.via, failed, reasons })
     return jsonResponse(
-      { ok: false, error: `以下话题排序没保存成功：${failed.join('、')}`, applied, failed },
+      {
+        ok: false,
+        error: `以下话题排序没保存成功：${failed.join('、')}`,
+        applied,
+        failed,
+        reasons,
+        via: write.via,
+      },
       500
     )
   }
 
-  console.log('[categories:reorder] ok', { count: applied.length, userId: auth.userId })
-  return jsonResponse({ ok: true, order: applied })
+  console.log('[categories:reorder] ok', { count: applied.length, userId: auth.userId, via: write.via })
+  return jsonResponse({ ok: true, order: applied, via: write.via })
 }

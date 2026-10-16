@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server'
-import { getSupabaseAdminClient } from '@/lib/supabaseAdmin'
-import { jsonResponse, requireAdmin } from '@/lib/aiGemini'
+import { getSupabaseWriteClient } from '@/lib/supabaseAdmin'
+import { getBearer, jsonResponse, requireAdmin } from '@/lib/aiGemini'
 
 export const runtime = 'nodejs'
 
@@ -23,6 +23,12 @@ const PAGE = 1000
  *   （同 `app/api/admin/categories/reorder/route.ts` 里记的那次实测：匿名 PATCH
  *   是 200 但 0 行受影响，RLS 静默拦下）；服务端拿 service role 才是确定能写的那条路。
  *
+ *   线上（2026-10-16 实测）admin 这个 Vercel 项目并没有配 service role key，
+ *   所以「确定能写的那条路」其实是**站长自己那张登录票** —— 与浏览器直写身份
+ *   完全等价（数据库给 authenticated 放行了 articles / categories 的读写）。
+ *   这里统一走 `getSupabaseWriteClient()`：service role 优先，没配就退回登录票，
+ *   并且删除/更新都回读校验行数，不再把「0 行受影响」当成功。
+ *
  * 为什么必须忽略大小写：
  *   线上 `categories.name` 存的是 `SPORTS`，而文章里写的是 `Sports`。
  *   若按 `= 'SPORTS'` 精确匹配会 0 行命中 —— 删完这 23 篇体育文章全变孤儿，
@@ -37,9 +43,10 @@ export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req)
   if (auth.ok === false) return auth.response
 
-  const admin = getSupabaseAdminClient()
-  if (!admin.ok) {
-    return jsonResponse({ error: admin.error || 'missing env: SUPABASE_SERVICE_ROLE_KEY' }, 500)
+  const write = getSupabaseWriteClient(getBearer(req))
+  if (!write.ok) {
+    console.log('[categories:delete] 没有可用的写库凭据', write.env)
+    return jsonResponse({ error: write.error || 'missing env', env: write.env }, 500)
   }
 
   let body: any = null
@@ -60,7 +67,13 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const client = admin.client
+  const client = write.client
+
+  // 0) 这个话题到底在不在库里 —— 台下「敲了名字还没随稿子保存过」的话题只活在
+  //    前端，删它不该报错（它本来就没落库）；而在库的话，第 4 步删出 0 行就说明
+  //    写权限被 RLS 拦下了，那种必须报错，不能当成功。
+  const { data: existingRows } = await client.from('categories').select('name').eq('name', name).limit(1)
+  const existed = Boolean(existingRows && existingRows.length > 0)
 
   // 1) 找出所有「忽略大小写等于 name」的文章分类写法（例如 Sports / SPORTS 混用）
   const wanted = name.toLowerCase()
@@ -97,11 +110,23 @@ export async function POST(req: NextRequest) {
     if (error) {
       console.log('[categories:delete] 迁移文章失败 ——', value, error.message)
       return jsonResponse(
-        { error: `把「${value}」的文章并进「${FALLBACK_CATEGORY}」失败：${error.message}` },
+        { error: `把「${value}」的文章并进「${FALLBACK_CATEGORY}」失败：${error.message}`, via: write.via },
         500
       )
     }
-    moved += count || 0
+    if (!count) {
+      // 0 行搬动 = RLS 静默拦下了 UPDATE（这个 value 是从文章里读出来的，
+      // 至少有一篇才对）。此时**不能继续删话题**，否则文章会留着孤儿分类名。
+      console.log('[categories:delete] 迁移文章 0 行 ——', value)
+      return jsonResponse(
+        {
+          error: `把「${value}」的文章并进「${FALLBACK_CATEGORY}」时 0 行受影响（写权限被 RLS 拦下了），话题未删除`,
+          via: write.via,
+        },
+        500
+      )
+    }
+    moved += count
   }
 
   // 3) 兜底话题必须留在矩阵里，被删话题的文章才有地方落（缺了就补一条，非致命）
@@ -118,15 +143,27 @@ export async function POST(req: NextRequest) {
   }
 
   // 4) 删掉话题本身
-  const { error: deleteError, count: deleted } = await client
+  const { data: deletedRows, error: deleteError, count: deleted } = await client
     .from('categories')
     .delete({ count: 'exact' })
     .eq('name', name)
+    // 回读被删掉的行：RLS 拦下的 DELETE 同样是「200 但 0 行」，
+    // 不回读就会把「根本没删掉」当成功报给站长。
+    .select('name')
   if (deleteError) {
     console.log('[categories:delete] 删话题失败 ——', deleteError.message)
-    return jsonResponse({ error: deleteError.message }, 500)
+    return jsonResponse({ error: deleteError.message, via: write.via }, 500)
   }
 
-  console.log('[categories:delete] ok', { name, matched: [...matched], moved, deleted, userId: auth.userId })
-  return jsonResponse({ ok: true, name, moved, matched: [...matched], deleted: deleted || 0 })
+  const removed = deletedRows?.length || deleted || 0
+  if (removed === 0 && existed) {
+    console.log('[categories:delete] 删话题 0 行 ——', name)
+    return jsonResponse(
+      { error: `「${name}」没有删掉（0 行受影响，写权限被 RLS 拦下了）`, via: write.via },
+      500
+    )
+  }
+
+  console.log('[categories:delete] ok', { name, matched: [...matched], moved, deleted: removed, existed, via: write.via, userId: auth.userId })
+  return jsonResponse({ ok: true, name, moved, matched: [...matched], deleted: removed, via: write.via })
 }
