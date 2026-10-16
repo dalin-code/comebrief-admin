@@ -18,7 +18,8 @@
  *
  * 密钥从哪来：
  *   · CRON_SECRET            —— 环境变量 CRON_SECRET → ~/.comebrief-cron-secret → 都没有就随机生成
- *                               64 位十六进制（32 字节）并落盘到 ~/.comebrief-cron-secret（0600）
+ *                               64 位十六进制（32 字节）并落盘到 ~/.comebrief-cron-secret
+ *                               （0600、**不带尾换行** —— 手工粘进后台时不会多带一个空行）
  *   · SUPABASE_SERVICE_ROLE_KEY —— 读仓库根的 .env.local，**不会**打印出来
  *
  * 可调环境变量：
@@ -140,7 +141,7 @@ function resolveCronSecret() {
   const fromEnv = process.env.CRON_SECRET?.trim()
   if (fromEnv) {
     if (!existsSync(SECRET_FILE) || readFileSync(SECRET_FILE, 'utf8').trim() !== fromEnv) {
-      writeFileSync(SECRET_FILE, fromEnv + '\n', { mode: 0o600 })
+      writeFileSync(SECRET_FILE, fromEnv, { mode: 0o600 })
     }
     return { value: fromEnv, source: '环境变量 CRON_SECRET（已同步到 ' + SECRET_FILE + '）' }
   }
@@ -149,7 +150,7 @@ function resolveCronSecret() {
     if (saved) return { value: saved, source: SECRET_FILE }
   }
   const fresh = randomBytes(32).toString('hex')
-  writeFileSync(SECRET_FILE, fresh + '\n', { mode: 0o600 })
+  writeFileSync(SECRET_FILE, fresh, { mode: 0o600 })
   chmodSync(SECRET_FILE, 0o600)
   return { value: fresh, source: `${SECRET_FILE}（本次新建，64 位十六进制）` }
 }
@@ -202,7 +203,7 @@ function setGithubSecret(value: string) {
     say('   ⚠️ 本机没有 gh CLI —— 这个 Secret 只能手工点一次（Vercel 那两个变量已配好）：')
     say(`      ① 打开 https://github.com/${GH_REPO}/settings/secrets/actions`)
     say(`      ② New repository secret → Name 填 ${KEY_CRON}`)
-    say(`      ③ Secret 里粘这一行的输出：cat ${SECRET_FILE}`)
+    say(`      ③ Secret 里粘这一串：pbcopy < ${SECRET_FILE}   # 文件不带尾换行，直接 ⌘V`)
     say('      或者先 brew install gh，再重跑本脚本（gh 已登录即可，也可用 GH_TOKEN=xxx）')
     return false
   }

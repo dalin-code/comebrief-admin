@@ -88,6 +88,18 @@ VERCEL_TOKEN=xxx GH_TOKEN=xxx node scripts/set-deploy-env.mts
 | Vercel | **重新部署一次** | Deployments → 最新那条 → Redeploy（不重新部署等于没配） |
 | GitHub 仓库 `dalin-code/comebrief-admin` | `CRON_SECRET`（与上面同值） | Settings → Secrets and variables → Actions → New repository secret |
 
+> 两处填的 `CRON_SECRET` 必须**一模一样**。本地那份落在 `~/.comebrief-cron-secret`
+> （0600、**不带尾换行**，粘进后台不会多出一个空行），粘之前先 `pbcopy < ~/.comebrief-cron-secret`；
+> 服务端 key 也能从本地直接拷：`grep -E '^SUPABASE_SERVICE_ROLE_KEY=' .env.local | cut -d= -f2- | tr -d '\n' | pbcopy`。
+>
+> 想确认线上到底认没认这两个变量，用 dry 跑一次（只读，不写库）：
+> ```bash
+> curl -sS -H "Authorization: Bearer $(cat ~/.comebrief-cron-secret)" \
+>   "https://admin.comebrief.com/api/cron/publish?dry=1"
+> ```
+> 预期 200 + `"dry":true`；`503 CRON_SECRET is not configured` = 变量没生效（多半漏了 Redeploy 或改错了项目）；
+> 不带 `Authorization` 再打一次应当拿到 **401**（拿到 503 说明变量还没生效）。
+
 没配 `CRON_SECRET` 时，生产环境访问该路由会直接返回 **503**（避免出现一个裸奔的公开写接口）；
 开发环境则放行，方便本地调试。
 
