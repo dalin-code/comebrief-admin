@@ -58,6 +58,36 @@ CRON_SECRET=<随机长字符串>
 SUPABASE_SERVICE_ROLE_KEY=<Supabase 的 service_role key>
 ```
 
+### 一键配（推荐）
+
+```bash
+cd Sass
+# 只配 Vercel（GitHub Secret 自己点网页）：
+VERCEL_TOKEN=xxx node scripts/set-deploy-env.mts
+# 顺手把 GitHub Actions Secret 也写了（本机有 gh 且已登录，或给 GH_TOKEN）：
+VERCEL_TOKEN=xxx GH_TOKEN=xxx node scripts/set-deploy-env.mts
+```
+
+`scripts/set-deploy-env.mts` 做四件事，幂等、可重复跑：
+
+1. 按域名 `admin.comebrief.com` 在 Vercel 里**自动找到**对应项目（不用猜项目名，个人名下和 team 下的项目都会翻；
+   也可 `VERCEL_PROJECT=<项目名>` 直接指定）
+2. 把两个变量以 `encrypted` 写进 `production,preview`，写完**回读项目的变量清单**证明真的进去了
+3. 触发一次生产重新部署 —— 环境变量的改动**必须重新部署才生效**
+4. 用 `gh` 把同一个 `CRON_SECRET` 写进 GitHub Actions Secret（没装 gh 就打印网页那三步）
+
+密钥来源：`CRON_SECRET` 取「环境变量 → `~/.comebrief-cron-secret` → 都没有就随机生成 64 位十六进制并落盘（0600）」；
+`SUPABASE_SERVICE_ROLE_KEY` 直接从仓库根的 `.env.local` 读 —— 脚本全程不打印值，只回读变量名。
+
+### 手工配
+
+| 位置 | 填什么 | 在哪 |
+|---|---|---|
+| Vercel 项目（挂 `admin.comebrief.com` 的那个） | `CRON_SECRET` | Settings → Environment Variables（勾 Production + Preview） |
+| 同上 | `SUPABASE_SERVICE_ROLE_KEY` | 同上；值在 Supabase → Project Settings → API → `service_role` |
+| Vercel | **重新部署一次** | Deployments → 最新那条 → Redeploy（不重新部署等于没配） |
+| GitHub 仓库 `dalin-code/comebrief-admin` | `CRON_SECRET`（与上面同值） | Settings → Secrets and variables → Actions → New repository secret |
+
 没配 `CRON_SECRET` 时，生产环境访问该路由会直接返回 **503**（避免出现一个裸奔的公开写接口）；
 开发环境则放行，方便本地调试。
 
@@ -101,6 +131,12 @@ SUPABASE_SERVICE_ROLE_KEY=<Supabase 的 service_role key>
 |---|---|---|
 | `CRON_SECRET` | 必填 | 与 Vercel 环境变量一致 |
 | `ADMIN_BASE_URL` | 选填 | 默认 `https://admin.comebrief.com` |
+
+装了 `gh` 的话一条命令就够（值从本地那份取，不进 shell 历史、不进聊天记录）：
+
+```bash
+gh secret set CRON_SECRET -R dalin-code/comebrief-admin --body-file - < ~/.comebrief-cron-secret
+```
 
 选它的原因：GitHub Actions 的定时任务**没有套餐限制**。
 
