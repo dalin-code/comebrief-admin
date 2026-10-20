@@ -1397,6 +1397,7 @@ function EditorContentComponent() {
         combo={storyCombo}
         onComboChange={setStoryCombo}
         hasExistingContent={Boolean(htmlToPlainText(getZhBody()).trim())}
+        sourceArticleId={articleId}
         showToast={showToast}
       />
     </div>

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   X, Loader2, Sparkles, Dices, Save, Trash2, AlertTriangle, CheckCircle2, PenLine, RotateCcw,
-  ClipboardCheck, Wand2,
+  ClipboardCheck, Wand2, ChevronDown, ChevronUp,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { getFreshAccessToken } from '@/lib/clientAuth'
@@ -26,6 +26,36 @@ import {
   type ReviewIssue,
   type StoryReview,
 } from '@/lib/storyReview'
+import { makeSeed } from '@/lib/storySelection'
+import type { StorySkeleton } from '@/lib/storyPlan'
+import type { StorySurface } from '@/lib/storyIdentity'
+import type { StorySection } from '@/lib/storyWrite'
+
+type StorySeeds = {
+  seed: string
+  variantIndex: number
+  skeletonSeed: string
+  surfaceSeed: string
+  proseSeed: string
+}
+
+type StoryPlanResponse = {
+  seed: string
+  variantIndex: number
+  seeds: StorySeeds
+  skeleton: StorySkeleton
+  surface?: StorySurface
+  fingerprint?: string
+  recipeId?: string | null
+  resolved?: {
+    combo?: Partial<Record<DimensionKey, string[]>>
+    skill?: { code: string; name?: string } | null
+    seed?: string
+    variantIndex?: number
+  }
+  resolvedTags?: Array<{ dimension: string; names: string[] }>
+  warnings?: string[]
+}
 
 export type GeneratedStory = {
   title: string
@@ -37,6 +67,23 @@ export type GeneratedStory = {
   skill?: { code: string; name: string } | null
   /** 这一版是不是写到模型的输出上限就断了 —— 「接着写下去」的自动补字就是看这个 */
   truncated?: boolean
+  /** P4：分段稿。每一段可以单独重写，前后段逐字保留 */
+  sections?: StorySection[]
+  /** P4：这一版用的骨架 / 表皮 / Seed；「换一版」只换表皮，不动骨架 */
+  skeleton?: StorySkeleton
+  surface?: StorySurface
+  seed?: string
+  variantIndex?: number
+  seeds?: StorySeeds
+  fingerprint?: string
+  recipeId?: string | null
+  shareCode?: string
+  resolved?: {
+    combo?: Partial<Record<DimensionKey, string[]>>
+    skill?: { code: string; name?: string } | null
+    seed?: string
+    variantIndex?: number
+  }
 }
 
 type Preset = { id: string; name: string; combo: StoryCombo; updated_at?: string }
@@ -55,6 +102,8 @@ export type StoryComposerProps = {
   onComboChange: (combo: StoryCombo) => void
   /** 正文里已经有中文内容了 —— 插入前要确认一次 */
   hasExistingContent: boolean
+  /** 正在编辑的文章 id：写进 story_recipe_variants，作为逐字复现的来源 */
+  sourceArticleId?: string | null
   showToast: (msg: string, type: 'success' | 'error') => void
 }
 
@@ -102,6 +151,7 @@ export function StoryComposer({
   combo,
   onComboChange,
   hasExistingContent,
+  sourceArticleId,
   showToast,
 }: StoryComposerProps) {
   const [tags, setTags] = useState<StoryTag[]>([])
@@ -116,7 +166,17 @@ export function StoryComposer({
   const [materials, setMaterials] = useState('')
   const [preview, setPreview] = useState<GeneratedStory | null>(null)
   const [applied, setApplied] = useState(false)
-  const [busy, setBusy] = useState<'idle' | 'generate' | 'continue' | 'review' | 'rewrite'>('idle')
+  const [busy, setBusy] = useState<'idle' | 'generate' | 'continue' | 'review' | 'rewrite' | 'section'>('idle')
+  /** 分段流水线的进度：规划骨架 → 逐段写 → 收尾 */
+  const [progress, setProgress] = useState<{ phase: 'plan' | 'write' | 'finalize'; current: number; total: number } | null>(null)
+  /** 正在重写哪一段（null = 没有单段任务） */
+  const [sectionBusy, setSectionBusy] = useState<number | null>(null)
+  /** 每段的「重写要求」草稿，按段号存 */
+  const [sectionNotes, setSectionNotes] = useState<Record<number, string>>({})
+  /** 展开查看/重写哪一段 */
+  const [openSection, setOpenSection] = useState<number | null>(0)
+  /** 前面的段被改过之后，从这一段开始后面的稿子可能已经对不上 */
+  const [staleFrom, setStaleFrom] = useState<number | null>(null)
   // P3：自评报告 + 勾选要改的条目（评审一出来就按「必改 / 低分维度」默认勾好）
   const [review, setReview] = useState<StoryReview | null>(null)
   const [reviewSkill, setReviewSkill] = useState<{ code: string; name: string } | null>(null)
@@ -151,6 +211,9 @@ export function StoryComposer({
         .map((d) => `${d.label} ${(lastResolved.combo?.[d.key] || []).join('＋')}`)
         .join(' · ')
     : ''
+  const seedValue = selection.seed || ''
+  const variantIndex = Math.max(0, Math.trunc(Number(selection.variantIndex) || 0))
+  const storySections = preview?.sections || []
 
   const tagsByDim = useMemo(() => {
     const map: Partial<Record<DimensionKey, StoryTag[]>> = {}
@@ -357,6 +420,101 @@ export function StoryComposer({
     return json.data
   }
 
+  const resolvedTagsPayload = (map?: Partial<Record<DimensionKey, string[]>>) =>
+    DIMENSIONS.map((d) => ({ dimension: d.key, names: map?.[d.key] || [] })).filter((x) => x.names.length)
+
+  /**
+   * P4 的分段写作流水线：骨架/表皮由 /plan 给，正文一段段写，最后只让模型起标题摘要。
+   * 好处是每一段都能单独重写，且“后面才揭晓的事”不会在第二段就被写掉。
+   */
+  const runWritePipeline = async (plan: StoryPlanResponse) => {
+    const { skeleton } = plan
+    const surface = plan.surface
+    if (!skeleton?.beats?.length) throw new Error('规划结果里没有骨架，请重试')
+    if (!surface) throw new Error('规划结果里没有人物/地点设定，请重试')
+
+    const resolvedSkill = plan.resolved?.skill || null
+    const writingSkill = resolvedSkill?.code || skillCode
+    const resolvedTags = plan.resolvedTags || resolvedTagsPayload(plan.resolved?.combo)
+    const sections: StorySection[] = []
+
+    for (let i = 0; i < skeleton.beats.length; i++) {
+      setProgress({ phase: 'write', current: i + 1, total: skeleton.beats.length })
+      const data = await apiPost('/api/ai/story/section', {
+        mode: 'write',
+        skeleton,
+        surface,
+        seeds: plan.seeds,
+        seed: plan.seed,
+        variantIndex: plan.variantIndex,
+        sectionIndex: i,
+        previousSections: sections,
+        idea,
+        materials,
+        length,
+        skill: writingSkill,
+        resolvedTags,
+      })
+      const section = data?.section as StorySection | undefined
+      if (!section?.html?.trim()) throw new Error(`第 ${i + 1} 段没有写出来，请重试`)
+      sections.push(section)
+    }
+
+    setProgress({ phase: 'finalize', current: sections.length, total: skeleton.beats.length })
+    const data = await apiPost('/api/ai/story/finalize', {
+      skeleton,
+      surface,
+      seeds: plan.seeds,
+      seed: plan.seed,
+      variantIndex: plan.variantIndex,
+      sections,
+      idea,
+      materials,
+      length,
+      skill: writingSkill,
+      recipeId: plan.recipeId || null,
+      sourceArticleId: sourceArticleId || null,
+    })
+
+    const sectionWarnings = sections.flatMap((s) => s.warnings || [])
+    const story: GeneratedStory = {
+      title: String(data?.title || '未命名短篇'),
+      excerpt: String(data?.excerpt || ''),
+      html: toStoryHtml(String(data?.html || sections.map((s) => s.html).join('\n'))),
+      chars: Number(data?.chars || countChineseChars(htmlToPlainText(sections.map((s) => s.html).join('\n')))),
+      warnings: Array.from(
+        new Set([
+          ...(plan.warnings || []),
+          ...sectionWarnings,
+          ...(Array.isArray(data?.warnings) ? data.warnings.map(String) : []),
+        ])
+      ),
+      skill: data?.skill || resolvedSkill,
+      truncated: false,
+      sections,
+      skeleton,
+      surface,
+      seed: plan.seed,
+      variantIndex: plan.variantIndex,
+      seeds: plan.seeds,
+      fingerprint: plan.fingerprint || surface.fingerprint,
+      recipeId: data?.recipeId || plan.recipeId || null,
+      shareCode: data?.shareCode ? String(data.shareCode) : '',
+      resolved: {
+        combo: plan.resolved?.combo,
+        skill: resolvedSkill,
+        seed: plan.seed,
+        variantIndex: plan.variantIndex,
+      },
+    }
+    setPreview(story)
+    setOpenSection(0)
+    setSectionNotes({})
+    setStaleFrom(null)
+    if (story.title) setSessionTitles((prev) => [story.title, ...prev].slice(0, 12))
+    return story
+  }
+
   const handleGenerate = async () => {
     // 不再要求「至少选一个标签」：未选的维度由服务端每次重新随机补全。
     // 历史只放在 lastResolved 里展示，绝不回填成选中 —— 否则同质化永远治不好。
@@ -368,59 +526,177 @@ export function StoryComposer({
     setReviewSkill(null)
     setPicked([])
     setReviewNotes('')
+    setProgress({ phase: 'plan', current: 0, total: 0 })
     try {
       // 「不要再撞」的名单：库里最近 12 篇 + 本次会话刚生成的几篇。
       // 不传也能生成，只是没有这层去重 —— 那就是「文章同质化」的来源。
       const avoidTitles = [...sessionTitles, ...recentTitles].slice(0, 16)
-      const data = await apiPost('/api/ai/story', {
+      const plan = (await apiPost('/api/ai/story/plan', {
+        mode: 'full',
         combo: selection,
         idea,
         materials,
         length,
         skill: skillCode,
+        seed: seedValue || undefined,
+        variantIndex,
         avoidTitles,
-      })
-      const story: GeneratedStory = {
-        title: String(data?.title || ''),
-        excerpt: String(data?.excerpt || ''),
-        // 服务端已经洗过一遍，这里再洗一遍 —— 预览要用 dangerouslySetInnerHTML，宁可多洗一次
-        html: toStoryHtml(String(data?.html || '')),
-        chars: Number(data?.chars || 0),
-        warnings: Array.isArray(data?.warnings) ? data.warnings.map(String) : [],
-        skill: data?.skill ?? null,
-        truncated: Boolean(data?.truncated),
-      }
-      setPreview(story)
-      // 这一篇的标题也进「不要再撞」的名单：连着点两次生成，第二篇就不会是换皮版
-      if (story.title) setSessionTitles((prev) => [story.title, ...prev].slice(0, 12))
-      const resolvedTags: Partial<Record<DimensionKey, string[]>> = {}
-      for (const item of Array.isArray(data?.resolvedTags) ? data.resolvedTags : []) {
-        const key = String(item?.dimension || '') as DimensionKey
-        const names = Array.isArray(item?.names) ? item.names.map(String).filter(Boolean) : []
-        if (DIMENSIONS.some((d) => d.key === key) && names.length) resolvedTags[key] = names
-      }
+        sourceArticleId: sourceArticleId || null,
+      })) as StoryPlanResponse
+
+      const story = await runWritePipeline(plan)
       onComboChange({
         ...selection,
         idea,
         materials,
         length,
         skill: skillCode,
+        seed: plan.seed,
+        variantIndex: plan.variantIndex,
         lastResolved: {
-          combo: resolvedTags,
-          skill: story.skill,
+          combo: plan.resolved?.combo || {},
+          skill: story.skill || plan.resolved?.skill || null,
+          seed: plan.seed,
+          variantIndex: plan.variantIndex,
           at: new Date().toISOString(),
         },
       })
       showToast(
-        story.truncated
-          ? `写好了：${story.chars} 字（被模型输出上限截断，点「接着写下去」会自动补完）`
-          : `写好了：${story.chars} 字`,
+        `写好了：${story.chars} 字 · ${story.sections?.length || 0} 段 · Seed ${plan.seed}${
+          plan.variantIndex ? ` · v${plan.variantIndex}` : ''
+        }`,
         'success'
       )
     } catch (e: any) {
       setError(e?.message || '生成失败')
     } finally {
       setBusy('idle')
+      setProgress(null)
+    }
+  }
+
+  /** 发一个新 Seed：下一篇文章换一副骨架，但当前预览不丢 */
+  const handleNewSeed = () => {
+    onComboChange({ ...selection, seed: makeSeed(), variantIndex: 0 })
+    setError('')
+    showToast('已换新 Seed：下次生成用新骨架', 'success')
+  }
+
+  /**
+   * 同 Seed 换一版：骨架逐字不动，只让表皮层换人、换地点、换物件，正文整篇重写。
+   * 这是「同 Seed = 同骨架」和「每次读到不一样的故事」同时成立的用法。
+   */
+  const handleVariant = async () => {
+    const baseSeed = preview?.seed || seedValue
+    if (!preview?.skeleton || !baseSeed) {
+      showToast('先完整生成一篇，才能同骨架换一版', 'error')
+      return
+    }
+    const nextVariant = (preview.variantIndex ?? variantIndex) + 1
+    setBusy('generate')
+    setError('')
+    setApplied(false)
+    setReview(null)
+    setReviewSkill(null)
+    setPicked([])
+    setProgress({ phase: 'plan', current: 0, total: 0 })
+    try {
+      const plan = (await apiPost('/api/ai/story/plan', {
+        mode: 'surface',
+        skeleton: preview.skeleton,
+        seed: baseSeed,
+        variantIndex: nextVariant,
+        combo: { ...selection, ...(preview.resolved?.combo || {}) },
+        idea,
+        materials,
+        length,
+        skill: preview.skill?.code || skillCode,
+        sourceArticleId: sourceArticleId || null,
+      })) as StoryPlanResponse
+
+      const story = await runWritePipeline(plan)
+      onComboChange({
+        ...selection,
+        idea,
+        materials,
+        length,
+        seed: baseSeed,
+        variantIndex: nextVariant,
+        lastResolved: {
+          combo: plan.resolved?.combo || {},
+          skill: story.skill || plan.resolved?.skill || null,
+          seed: baseSeed,
+          variantIndex: nextVariant,
+          at: new Date().toISOString(),
+        },
+      })
+      showToast(`已换一版（v${nextVariant}）：骨架不变，人物/地点/正文全换`, 'success')
+    } catch (e: any) {
+      setError(e?.message || '换一版失败')
+    } finally {
+      setBusy('idle')
+      setProgress(null)
+    }
+  }
+
+  /** 只重写某一段：前后段原样保留；改前面的段会提示后面可能对不上 */
+  const handleSectionRewrite = async (index: number) => {
+    if (!preview?.skeleton || !preview.surface || !storySections[index]) return
+    const current = storySections[index]
+    setBusy('section')
+    setSectionBusy(index)
+    setError('')
+    try {
+      const data = await apiPost('/api/ai/story/section', {
+        mode: 'rewrite',
+        skeleton: preview.skeleton,
+        surface: preview.surface,
+        seeds: preview.seeds,
+        seed: preview.seed || seedValue,
+        variantIndex: preview.variantIndex ?? variantIndex,
+        sectionIndex: index,
+        previousSections: storySections.slice(0, index),
+        html: current.html,
+        notes: sectionNotes[index] || '',
+        idea,
+        materials,
+        length,
+        skill: preview.skill?.code || skillCode,
+        resolvedTags: resolvedTagsPayload(preview.resolved?.combo),
+      })
+      const section = data?.section as StorySection | undefined
+      if (!section?.html?.trim()) throw new Error('重写没有返回正文，原稿已保留')
+
+      const nextSections = storySections.map((s, i) => (i === index ? section : s))
+      const mergedHtml = toStoryHtml(nextSections.map((s) => s.html).join('\n'))
+      const mergedChars = countChineseChars(htmlToPlainText(mergedHtml))
+      setPreview((prev) =>
+        prev
+          ? {
+              ...prev,
+              sections: nextSections,
+              html: mergedHtml,
+              chars: mergedChars,
+              warnings: Array.from(new Set([...prev.warnings, ...(section.warnings || [])])),
+            }
+          : prev
+      )
+      setStaleFrom(index < nextSections.length - 1 ? index + 1 : null)
+      setApplied(false)
+      setReview(null)
+      setReviewSkill(null)
+      setPicked([])
+      showToast(
+        section.isFinal && !section.ended
+          ? `第 ${index + 1} 段已重写，但结尾还不够明确，建议再收一次`
+          : `第 ${index + 1} 段已重写：${current.chars} → ${section.chars} 字`,
+        'success'
+      )
+    } catch (e: any) {
+      setError(e?.message || '这一段重写失败（原稿没有动）')
+    } finally {
+      setBusy('idle')
+      setSectionBusy(null)
     }
   }
 
@@ -436,6 +712,10 @@ export function StoryComposer({
    *      否则预览会比编辑器旧，再点「插入编辑器」反而把新续的内容盖掉。
    */
   const handleContinue = async () => {
+    if (preview?.skeleton) {
+      showToast('这一版已经按骨架逐段写完并收尾了；写得不顺的段落请用「重写这段」', 'error')
+      return
+    }
     const previewText = preview ? htmlToPlainText(preview.html).trim() : ''
     const draftText = previewText || getCurrentZhText().trim()
     if (draftText.length < 50) {
@@ -741,6 +1021,13 @@ export function StoryComposer({
                 {lastResolved.skill?.code && (
                   <span className="text-indigo-500"> · 写法 {lastResolved.skill.code}（{lastResolved.skill.name}）</span>
                 )}
+                {lastResolved.seed && (
+                  <span className="text-slate-400">
+                    {' '}
+                    · Seed {lastResolved.seed}
+                    {lastResolved.variantIndex ? ` · v${lastResolved.variantIndex}` : ''}
+                  </span>
+                )}
               </p>
               {lastResolved.at && (
                 <p className="mt-1 text-[9px] font-bold text-slate-300">
@@ -750,7 +1037,38 @@ export function StoryComposer({
             </div>
           )}
 
-          {/* 写法（story_skills）—— 换的是叙述姿态而不是题材，是治 AI 味最有效的一栏 */}
+          {/* 分段流水线进度：规划骨架 → 逐段写 → 收尾 */}
+          {progress && busy === 'generate' && (
+            <div className="p-5 rounded-3xl bg-indigo-50/70 border border-indigo-100 text-left space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <span className="flex items-center gap-2 text-[11px] font-black text-indigo-700">
+                  <Loader2 size={13} className="animate-spin" />
+                  {progress.phase === 'plan'
+                    ? '正在规划骨架、人物与场景…'
+                    : progress.phase === 'write'
+                      ? `正在写第 ${progress.current}/${progress.total} 段…`
+                      : '正文写完，正在起标题与摘要…'}
+                </span>
+                <span className="text-[10px] font-black text-indigo-400">{elapsed}s</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-white overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-indigo-500 transition-all"
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      progress.phase === 'plan' ? 6 : progress.phase === 'write' ? 8 + (progress.current / Math.max(1, progress.total)) * 86 : 96
+                    )}%`,
+                  }}
+                />
+              </div>
+              <p className="text-[9px] font-bold text-indigo-400 leading-relaxed">
+                每段有独立的字数硬边界和「禁止提前揭晓」；写坏了可以只重写那一段。
+              </p>
+            </div>
+          )}
+
+
           {skills.length > 0 && (
             <div className="space-y-2.5 pb-7 border-b border-slate-100">
               <div className="flex items-center justify-between px-1">
@@ -952,7 +1270,74 @@ export function StoryComposer({
             </p>
           </div>
 
-          {/* 常用配方 —— 存下来，下次一键套用 */}
+          {/* Seed · 同 Seed 同骨架 / 换一版换表皮 */}
+          <div className="space-y-3 pt-4 border-t border-slate-100">
+            <div className="flex items-center justify-between gap-3">
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left block">
+                Seed · 复现
+                <span className="ml-2 font-bold tracking-normal normal-case text-slate-300">
+                  同 Seed = 同一副骨架
+                </span>
+              </label>
+              <span className="text-[10px] font-black text-slate-400">v{variantIndex}</span>
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={seedValue}
+                onChange={(e) => onComboChange({ ...selection, seed: e.target.value, variantIndex: 0 })}
+                placeholder="留空 = 每次生成新 Seed"
+                className="flex-1 px-4 py-3 bg-slate-50 rounded-2xl border border-slate-100 outline-none text-[12px] font-bold focus:border-indigo-200 transition-all"
+              />
+              <button
+                type="button"
+                onClick={handleNewSeed}
+                disabled={busy !== 'idle'}
+                title="发一个新 Seed：下一篇文章换一副骨架"
+                className="px-4 rounded-2xl bg-slate-900 text-white text-[10px] font-black uppercase flex items-center gap-2 disabled:opacity-50"
+              >
+                <Dices size={13} /> 新 Seed
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {preview?.skeleton && (!seedValue || !preview.seed || seedValue === preview.seed) && (
+                <button
+                  type="button"
+                  onClick={handleVariant}
+                  disabled={busy !== 'idle'}
+                  title="骨架逐字不动，只换人名、地点、时间、物件，正文整篇重写"
+                  className="px-4 py-2.5 rounded-2xl bg-indigo-50 border border-indigo-100 text-[10px] font-black uppercase tracking-widest text-indigo-700 hover:bg-indigo-100 disabled:opacity-50 transition-all flex items-center gap-2"
+                >
+                  {busy === 'generate' && progress?.phase !== 'plan' ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    <RotateCcw size={12} />
+                  )}
+                  同 Seed 换一版（v{(preview.variantIndex ?? variantIndex) + 1}）
+                </button>
+              )}
+              {preview?.skeleton && seedValue && preview.seed && seedValue !== preview.seed && (
+                <span className="px-3 py-2 rounded-2xl bg-amber-50 border border-amber-100 text-[9px] font-black text-amber-600">
+                  Seed 已改：先生成一篇，再同 Seed 换一版
+                </span>
+              )}
+              {preview?.shareCode && (
+                <span className="px-3 py-2 rounded-2xl bg-slate-50 border border-slate-100 text-[9px] font-black text-slate-400">
+                  分享码 {preview.shareCode}
+                </span>
+              )}
+              {preview?.fingerprint && (
+                <span className="px-3 py-2 rounded-2xl bg-slate-50 border border-slate-100 text-[9px] font-black text-slate-300">
+                  表皮 {preview.fingerprint}
+                </span>
+              )}
+            </div>
+            <p className="text-[9px] text-slate-300 leading-relaxed text-left px-1">
+              同一 Seed 会复用同一副骨架；「换一版」只换人物/地点/时间/物件和正文。逐字复现请靠插入编辑器后保存文章的原文。
+              {sourceArticleId ? ' 本次会把当前文章 id 记进 story_recipe_variants。' : ''}
+            </p>
+          </div>
+
+
           <div className="space-y-3 pt-4 border-t border-slate-100">
             <div className="flex items-center justify-between">
               <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left block">
@@ -1031,6 +1416,87 @@ export function StoryComposer({
               {preview.excerpt && (
                 <p className="text-[11px] text-slate-400 leading-relaxed italic text-left">{preview.excerpt}</p>
               )}
+
+              {/* P4 分段：展开某一段可以只重写它，前后段逐字保留 */}
+              {storySections.length > 0 && (
+                <div className="space-y-2 pt-3 border-t border-slate-200/80">
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left block">
+                      分段 · 可单独重写
+                    </label>
+                    <span className="text-[9px] font-black text-slate-300">
+                      {storySections.length} 段 · 骨架 {preview.skeleton?.skeletonHash?.slice(0, 6) || '—'}
+                    </span>
+                  </div>
+                  {staleFrom !== null && (
+                    <p className="flex items-start gap-2 text-[10px] font-bold text-amber-600 text-left">
+                      <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                      第 {staleFrom + 1} 段起还是按旧稿写的，可能和刚改的那段对不上；要顺一遍就逐段重写。
+                    </p>
+                  )}
+                  {storySections.map((s, i) => {
+                    const expanded = openSection === i
+                    const target = preview.skeleton?.beats[i]?.targetChars
+                    return (
+                      <div key={`${s.beatId}-${i}`} className="rounded-2xl bg-white border border-slate-100 overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => setOpenSection(expanded ? null : i)}
+                          className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50/70 transition-colors"
+                        >
+                          <span className="text-[11px] font-black text-slate-700">
+                            第 {i + 1} 段 · {s.function || '未命名功能'}
+                          </span>
+                          <span className="flex items-center gap-2 text-[9px] font-black text-slate-400 shrink-0">
+                            <span>{s.chars} 字{target ? ` / 目标 ${target}` : ''}</span>
+                            <span className={s.stateDelta === 'breaking' ? 'text-rose-500' : s.stateDelta === 'additive' ? 'text-indigo-500' : 'text-slate-300'}>
+                              {s.stateDelta === 'breaking' ? '改变方向' : s.stateDelta === 'additive' ? '追加信息' : '保持'}
+                            </span>
+                            {s.isFinal && <span className={s.ended ? 'text-emerald-600' : 'text-amber-500'}>{s.ended ? '已收尾' : '未收尾'}</span>}
+                            {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                          </span>
+                        </button>
+                        {expanded && (
+                          <div className="px-4 pb-4 space-y-3 border-t border-slate-100">
+                            <div
+                              className="pt-3 max-h-60 overflow-y-auto pr-1 text-[12px] leading-relaxed text-slate-600 text-left space-y-2"
+                              dangerouslySetInnerHTML={{ __html: s.html }}
+                            />
+                            {s.warnings.map((w, wi) => (
+                              <p key={wi} className="flex items-start gap-2 text-[9px] font-bold text-amber-600 text-left">
+                                <AlertTriangle size={11} className="mt-0.5 shrink-0" /> {w}
+                              </p>
+                            ))}
+                            <textarea
+                              value={sectionNotes[i] || ''}
+                              onChange={(e) => setSectionNotes((prev) => ({ ...prev, [i]: e.target.value }))}
+                              rows={2}
+                              maxLength={800}
+                              placeholder="这段想怎么改？（可留空：只让它重写得更具体）"
+                              className="w-full p-3 bg-slate-50 rounded-2xl border border-slate-100 outline-none text-[11px] font-medium leading-relaxed resize-none focus:border-indigo-200 focus:bg-white transition-all"
+                            />
+                            <div className="flex items-center justify-between gap-3">
+                              <button
+                                type="button"
+                                onClick={() => handleSectionRewrite(i)}
+                                disabled={busy !== 'idle'}
+                                className="px-4 py-2.5 rounded-2xl bg-slate-900 text-white text-[9px] font-black uppercase tracking-widest flex items-center gap-2 hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                              >
+                                {sectionBusy === i ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+                                {sectionBusy === i ? '正在重写这段…' : '重写这段'}
+                              </button>
+                              <span className="text-[9px] font-bold text-slate-300">
+                                只改这一段，前后段逐字保留
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
               <div
                 className="max-h-80 overflow-y-auto pr-2 text-left text-[13px] leading-relaxed text-slate-600 space-y-3"
                 dangerouslySetInnerHTML={{ __html: preview.html }}
@@ -1219,7 +1685,13 @@ export function StoryComposer({
             >
               {busy === 'generate' ? (
                 <>
-                  <Loader2 size={16} className="animate-spin" /> 正在写… {elapsed}s
+                  <Loader2 size={16} className="animate-spin" />
+                  {progress?.phase === 'write'
+                    ? `正在写第 ${progress.current}/${progress.total} 段…`
+                    : progress?.phase === 'finalize'
+                      ? '正在收尾…'
+                      : '正在规划骨架…'}{' '}
+                  {elapsed}s
                 </>
               ) : (
                 <>
@@ -1236,21 +1708,23 @@ export function StoryComposer({
               <PenLine size={15} /> {applied ? '再插一次' : '插入编辑器'}
             </button>
           </div>
-          <button
-            type="button"
-            onClick={handleContinue}
-            disabled={busy !== 'idle'}
-            className="w-full h-11 rounded-2xl border border-dashed border-slate-200 text-slate-400 font-black text-[10px] uppercase tracking-widest hover:border-slate-400 hover:text-slate-600 disabled:opacity-40 transition-all flex items-center justify-center gap-2"
-          >
-            {busy === 'continue' ? (
-              <>
-                <Loader2 size={14} className="animate-spin" />
-                自动续写中… 第 {continueRound || 1}/{MAX_AUTO_CONTINUE_ROUNDS} 轮 · 已补 {continueGain} 字 · {elapsed}s
-              </>
-            ) : (
-              <>接着写下去（写不够会自动一轮轮补到目标字数）</>
-            )}
-          </button>
+          {!preview?.skeleton && (
+            <button
+              type="button"
+              onClick={handleContinue}
+              disabled={busy !== 'idle'}
+              className="w-full h-11 rounded-2xl border border-dashed border-slate-200 text-slate-400 font-black text-[10px] uppercase tracking-widest hover:border-slate-400 hover:text-slate-600 disabled:opacity-40 transition-all flex items-center justify-center gap-2"
+            >
+              {busy === 'continue' ? (
+                <>
+                  <Loader2 size={14} className="animate-spin" />
+                  自动续写中… 第 {continueRound || 1}/{MAX_AUTO_CONTINUE_ROUNDS} 轮 · 已补 {continueGain} 字 · {elapsed}s
+                </>
+              ) : (
+                <>接着写下去（写不够会自动一轮轮补到目标字数）</>
+              )}
+            </button>
+          )}
         </footer>
       </aside>
     </>

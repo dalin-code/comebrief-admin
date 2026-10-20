@@ -236,6 +236,12 @@ export type CallTextOptions = {
    */
   thinkingBudget?: number
   /**
+   * 供应商随机种子。只对明确支持的 Gemini / OpenAI 直连透传；
+   * Anthropic / OpenRouter 不传（它们没有这个参数）。
+   * 供应商若因 seed 返回 400，callOnce() 会自动去掉 seed 重试一次，不计入业务重试。
+   */
+  seed?: number
+  /**
    * 「所有候选模型都没成，而其中某个只是被限流」时，最多愿意原地等多少毫秒再打一次它。
    *
    * 为什么需要它：同一把 Key 下的模型是各自独立的额度池，看起来「全挂」其实常常只是 RPM
@@ -339,6 +345,8 @@ async function callGeminiProtocol(target: ResolvedTarget, o: CallTextOptions): P
   const generationConfig: Record<string, unknown> = { temperature: o.temperature ?? 0.7 }
   if (o.maxOutputTokens) generationConfig.maxOutputTokens = o.maxOutputTokens
   if (o.jsonMode) generationConfig.responseMimeType = 'application/json'
+  // 同 Seed 复现：Gemini 原生支持 generationConfig.seed
+  if (typeof o.seed === 'number') generationConfig.seed = o.seed
   // 写正文时必须关掉思考，否则思考 token 会和正文抢 maxOutputTokens
   if (typeof o.thinkingBudget === 'number') generationConfig.thinkingConfig = { thinkingBudget: o.thinkingBudget }
 
@@ -404,6 +412,8 @@ async function callOpenAiProtocol(target: ResolvedTarget, o: CallTextOptions): P
     else body.max_tokens = o.maxOutputTokens
   }
   if (o.jsonMode) body.response_format = { type: 'json_object' }
+  // OpenRouter / DeepSeek 等兼容层对 seed 的支持不一致：只在 OpenAI 直连时透传
+  if (typeof o.seed === 'number' && target.provider === 'openai') body.seed = o.seed
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -494,6 +504,8 @@ async function callOnce(target: ResolvedTarget, o: CallTextOptions): Promise<Raw
   // 不重试的话站长点一下「生成」，撞上五秒的 TLS 抖动就只能收获一句 fetch failed。
   // 所以这里自带一次快速重试，而且不占用调用方的 retry 配额。
   let networkRetryLeft = 1
+  // seed 不被供应商接受时，去掉 seed 再试一次；只做一次，且不占业务重试配额
+  let seedDropped = false
   // 快速重试靠 `attempt -= 1` 实现（不占调用方配额），所以日志不能用 attempt 当次数
   let requestNo = 0
 
@@ -515,6 +527,20 @@ async function callOnce(target: ResolvedTarget, o: CallTextOptions): Promise<Raw
             ? await callAnthropicProtocol(target, opts)
             : await callOpenAiProtocol(target, opts)
       if (r.ok === true) return r
+      // 某些兼容端点会直接把 seed 当非法参数回 400：去掉 seed 保留正文，
+      // 不能因为一个可选参数让整篇稿子生不出来。
+      if (
+        r.status === 400 &&
+        typeof opts.seed === 'number' &&
+        !seedDropped &&
+        (target.provider === 'gemini' || target.provider === 'openai')
+      ) {
+        seedDropped = true
+        opts = { ...opts, seed: undefined }
+        console.log(`[ai-provider] ${target.label}/${target.model} 不接受 seed（400），去掉 seed 重试一次`)
+        attempt -= 1
+        continue
+      }
       last = r
       if (r.retryable === false) return r
     } catch (e: any) {
