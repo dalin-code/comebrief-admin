@@ -11,6 +11,7 @@
  *   写法是加分项，不该成为发布路上的单点故障。
  */
 import type { StorySkill } from './storyPrompt'
+import { pickRandomSkill } from './storySelection'
 
 export type LoadedSkill = {
   row: StorySkill | null
@@ -64,7 +65,43 @@ export async function loadSkill(client: any, skillCode: unknown): Promise<Loaded
   }
 }
 
+/**
+ * 取本次要用的写法，但「没选」时**随机抽一个**，不再回落到 is_default。
+ *
+ * 背景：站长说「未选写法 → A–F 随机，不再默认 A」。默认写法仍然留在库里给
+ * 设置页展示，但生成流程不再读它 —— 否则所谓「随机」永远只是 A。
+ */
+export async function loadRandomSkill(
+  client: any,
+  skillCode: unknown,
+  rng: () => number = Math.random
+): Promise<LoadedSkill> {
+  const code = String(skillCode ?? '').trim()
+  if (code) return loadSkill(client, code)
+
+  try {
+    const { data, error } = await client.from('story_skills').select('*').eq('is_active', true)
+    if (error) {
+      if (isMissingTableError(error.message)) {
+        return {
+          row: null,
+          warning: '写法库还没建好：请先在 Supabase 里执行 supabase/43_story_skills.sql（本次按无写法生成）',
+        }
+      }
+      return { row: null, warning: `读取写法失败：${error.message}（本次按无写法生成）` }
+    }
+    const row = pickRandomSkill((data || []) as StorySkill[], rng)
+    if (!row) {
+      return { row: null, warning: '写法库里没有启用的写法（本次按无写法生成）' }
+    }
+    return { row }
+  } catch (e: any) {
+    return { row: null, warning: `读取写法异常：${e?.message || '未知错误'}（本次按无写法生成）` }
+  }
+}
+
 /** 只想知道「这次用哪套写法」，不关心 warning 的场景用这个 */
 export async function loadSkillRow(client: any, skillCode: unknown): Promise<StorySkill | null> {
   return (await loadSkill(client, skillCode)).row
 }
+

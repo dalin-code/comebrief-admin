@@ -139,12 +139,34 @@ export type StoryTag = {
   is_active: boolean
 }
 
+/**
+ * 上一次生成实际用到的配置 —— 只用于展示，**不是**下一次的选中值。
+ *
+ * 站长 2026-10 的明确要求：未选标签时每次随机补全，不能把上一次的随机结果
+ * 当成默认选中。所以它单独放在 `lastResolved`，面板只读、不回填。
+ */
+export type StoryLastResolved = {
+  combo?: Partial<Record<DimensionKey, string[]>>
+  skill?: { code: string; name?: string } | null
+  seed?: string
+  variantIndex?: number
+  at?: string
+}
+
 export type StoryCombo = Partial<Record<DimensionKey, string[]>> & {
   length?: number
   idea?: string
   materials?: string
-  /** 写法 code（A–F）。留空 = 用 story_skills 表里的默认写法 */
+  /**
+   * 写法 code（A–F）。留空 = 每次从启用写法里随机抽一个；
+   * 注意：不再回落到 story_skills.is_default（那会让「未选」永远等于 A）。
+   */
   skill?: string
+  /** P4：同一 Seed = 同一副骨架；换 variantIndex 只换人名/地点/正文 */
+  seed?: string
+  variantIndex?: number
+  /** 上一次实际用到的随机标签 / 写法，仅供面板展示 */
+  lastResolved?: StoryLastResolved
 }
 
 /** 7 排的显示顺序与中文名 —— 后台面板与提示词共用这一份定义，不会再对不上 */

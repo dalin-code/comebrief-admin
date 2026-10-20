@@ -7,6 +7,7 @@ import {
   buildStorySystemPrompt,
   buildStoryUserPrompt,
   countChineseChars,
+  DIMENSIONS,
   parseDelimitedStory,
   toStoryHtml,
   type DimensionKey,
@@ -14,7 +15,8 @@ import {
   type StoryTag,
 } from '@/lib/storyPrompt'
 import { getSupabaseAdminClient } from '@/lib/supabaseAdmin'
-import { loadSkill } from '@/lib/storySkills'
+import { loadRandomSkill, loadSkill } from '@/lib/storySkills'
+import { resolveComboTags } from '@/lib/storySelection'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -77,21 +79,21 @@ export async function POST(req: NextRequest) {
     }
 
     const all = (rows || []) as StoryTag[]
-    const tagsByDimension: Partial<Record<DimensionKey, StoryTag[]>> = {}
     const warnings: string[] = []
 
+    const tagsByDimension: Partial<Record<DimensionKey, StoryTag[]>> = {}
     for (const key of DIMENSION_KEYS) {
-      const wanted = Array.isArray(combo[key]) ? (combo[key] as string[]) : []
-      if (!wanted.length) continue
-      const picked = wanted
-        .map((name) => all.find((t) => t.dimension === key && t.name === name))
-        .filter(Boolean) as StoryTag[]
+      const picked = all.filter((t) => t.dimension === key)
       if (picked.length) tagsByDimension[key] = picked
-      if (picked.length !== wanted.length) {
-        const gone = wanted.filter((n) => !picked.some((p) => p.name === n))
-        warnings.push(`标签库里找不到「${gone.join('、')}」，已跳过`)
-      }
     }
+
+    /**
+     * 未选的维度在这里一次性随机补齐 —— 不读上一版的 lastResolved，也不把
+     * 随机结果写回前端选择。旧版这里是「不选就交给模型」，模型会反复写同一套；
+     * 现在每次换一组具体标签，至少保证输入不同。
+     */
+    const resolved = resolveComboTags({ combo, tagsByDimension })
+    warnings.push(...resolved.warnings)
 
     if (!continueFrom && !Object.keys(tagsByDimension).length && !idea) {
       return jsonResponse({ error: '至少选一个标签，或者写一句构思' }, 400)
@@ -99,7 +101,10 @@ export async function POST(req: NextRequest) {
 
     // 写法层（story_skills）：body.skill 传 code；不传就用库里的默认写法。
     // 迁移没跑、或 code 不存在，都只进 warnings，不挡生成 —— 先把稿子写出来要紧。
-    const chosen = await loadSkill(admin.client, body?.skill)
+    // 续写 / 回写必须沿用同一支笔；只有「新写一篇」才在未选写法时随机抽 A–F
+    const chosen = continueFrom
+      ? await loadSkill(admin.client, body?.skill)
+      : await loadRandomSkill(admin.client, body?.skill)
     if (chosen.warning) warnings.push(chosen.warning)
 
     // 提示词分两半发：稳定不变的「写作宪法 + 写法 + 范文」走 system（可被缓存），本篇设定走 user
@@ -113,7 +118,7 @@ export async function POST(req: NextRequest) {
           tailText: continueFrom,
           remainingWords: Math.max(300, length - countChineseChars(continueFrom)),
         })
-      : buildStoryUserPrompt({ combo, tagsByDimension, idea, materials, length, avoidTitles })
+      : buildStoryUserPrompt({ combo: resolved.combo, tagsByDimension, idea, materials, length, avoidTitles })
 
     const ai = await callText({
       task: 'story',
@@ -153,9 +158,10 @@ export async function POST(req: NextRequest) {
           mode: 'continue',
           html,
           chars,
-          warnings: continueWarnings,
+          warnings: [...warnings, ...continueWarnings],
           truncated: ai.truncated,
           model: ai.model,
+          skill: chosen.row ? { code: chosen.row.code, name: chosen.row.name } : null,
         },
       })
     }
@@ -186,6 +192,12 @@ export async function POST(req: NextRequest) {
         truncated: ai.truncated,
         model: ai.model,
         skill: chosen.row ? { code: chosen.row.code, name: chosen.row.name } : null,
+        /** 本次实际用到的组合（随机补全后的结果）—— 只给前端展示，不回填选择 */
+        resolvedCombo: resolved.combo,
+        resolvedTags: DIMENSIONS.map((d) => ({
+          dimension: d.key,
+          names: resolved.pickedNames[d.key] || [],
+        })).filter((x) => x.names.length),
       },
     })
   } catch (e: any) {

@@ -145,6 +145,12 @@ export function StoryComposer({
   const length = Number(selection.length) || 1500
   const skillCode = selection.skill || ''
   const activeSkill = skills.find((s) => s.code === skillCode) || null
+  const lastResolved = selection.lastResolved || null
+  const lastResolvedSummary = lastResolved
+    ? DIMENSIONS.filter((d) => (lastResolved.combo?.[d.key] || []).length)
+        .map((d) => `${d.label} ${(lastResolved.combo?.[d.key] || []).join('＋')}`)
+        .join(' · ')
+    : ''
 
   const tagsByDim = useMemo(() => {
     const map: Partial<Record<DimensionKey, StoryTag[]>> = {}
@@ -352,11 +358,8 @@ export function StoryComposer({
   }
 
   const handleGenerate = async () => {
-    const picked = DIMENSIONS.filter((d) => (selection[d.key] || []).length).length
-    if (!picked && !idea.trim()) {
-      showToast('至少选一个标签，或者写一句构思', 'error')
-      return
-    }
+    // 不再要求「至少选一个标签」：未选的维度由服务端每次重新随机补全。
+    // 历史只放在 lastResolved 里展示，绝不回填成选中 —— 否则同质化永远治不好。
     setBusy('generate')
     setError('')
     setPreview(null)
@@ -390,7 +393,24 @@ export function StoryComposer({
       setPreview(story)
       // 这一篇的标题也进「不要再撞」的名单：连着点两次生成，第二篇就不会是换皮版
       if (story.title) setSessionTitles((prev) => [story.title, ...prev].slice(0, 12))
-      onComboChange({ ...selection, idea, materials, length, skill: skillCode })
+      const resolvedTags: Partial<Record<DimensionKey, string[]>> = {}
+      for (const item of Array.isArray(data?.resolvedTags) ? data.resolvedTags : []) {
+        const key = String(item?.dimension || '') as DimensionKey
+        const names = Array.isArray(item?.names) ? item.names.map(String).filter(Boolean) : []
+        if (DIMENSIONS.some((d) => d.key === key) && names.length) resolvedTags[key] = names
+      }
+      onComboChange({
+        ...selection,
+        idea,
+        materials,
+        length,
+        skill: skillCode,
+        lastResolved: {
+          combo: resolvedTags,
+          skill: story.skill,
+          at: new Date().toISOString(),
+        },
+      })
       showToast(
         story.truncated
           ? `写好了：${story.chars} 字（被模型输出上限截断，点「接着写下去」会自动补完）`
@@ -710,6 +730,26 @@ export function StoryComposer({
 
         {/* 主体（可滚动） */}
         <div className="flex-1 overflow-y-auto px-8 py-7 space-y-7">
+          {/* 上一次实际用了什么 —— 只读记录；不回填成选中，避免随机结果变成默认 */}
+          {lastResolved && (
+            <div className="p-4 rounded-3xl bg-slate-50 border border-slate-100 text-left">
+              <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">
+                上次实际用到 · 仅记录，不会自动选中
+              </p>
+              <p className="mt-1.5 text-[11px] font-bold text-slate-500 leading-relaxed">
+                {lastResolvedSummary || '（没有记录到标签）'}
+                {lastResolved.skill?.code && (
+                  <span className="text-indigo-500"> · 写法 {lastResolved.skill.code}（{lastResolved.skill.name}）</span>
+                )}
+              </p>
+              {lastResolved.at && (
+                <p className="mt-1 text-[9px] font-bold text-slate-300">
+                  {new Date(lastResolved.at).toLocaleString('zh-CN')}
+                </p>
+              )}
+            </div>
+          )}
+
           {/* 写法（story_skills）—— 换的是叙述姿态而不是题材，是治 AI 味最有效的一栏 */}
           {skills.length > 0 && (
             <div className="space-y-2.5 pb-7 border-b border-slate-100">
@@ -718,7 +758,7 @@ export function StoryComposer({
                   <span className="text-slate-300 mr-1.5">笔法</span>
                   写法
                   <span className="ml-2 font-bold tracking-normal normal-case text-slate-300">
-                    不选 = 用后台的默认写法
+                    不选 = 每次随机抽一种写法
                   </span>
                 </label>
               </div>
