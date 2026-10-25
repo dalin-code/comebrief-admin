@@ -10,7 +10,9 @@
  * 用法：node --import ./scripts/_ts-resolve.mts scripts/p4-selection-check.mts
  */
 import {
+  MATERIAL_FIRST_LENGTH,
   deriveSeeds,
+  isMaterialFirst,
   normalizeCombo,
   resolveComboTags,
   pickRandomSkill,
@@ -50,6 +52,28 @@ check('1a 未选标签时每个维度都有标签', DIMENSIONS.every((d) => (emp
 check('1b 随机补全的维度全被记录', empty.randomFilled.length === DIMENSIONS.length)
 check('1c 提示词里拿到的是具体标签，不是空对象', Object.keys(empty.tagsByDimension).length === DIMENSIONS.length)
 
+/* 1d. 素材优先：不随机补标签，但手动选的标签仍保留（只影响表层） */
+const materialMode = resolveComboTags({
+  combo: { genre: ['都市悬疑'], length: MATERIAL_FIRST_LENGTH },
+  tagsByDimension,
+  rng: () => 0.1,
+  randomFill: false,
+})
+check('1d 素材优先时不随机补任何维度', materialMode.randomFilled.length === 0)
+check(
+  '1e 素材优先时只保留手动选的标签',
+  Object.keys(materialMode.pickedNames).length === 1 && materialMode.pickedNames.genre?.join('') === '都市悬疑'
+)
+check(
+  '1f 素材优先时不再提示「已随机补全」',
+  !materialMode.warnings.some((w) => w.includes('随机补全'))
+)
+
+/* 1g. 素材优先判定 / 固定篇幅 */
+check('1g 有素材 = 素材优先', isMaterialFirst('一段原始故事'))
+check('1h 空白素材不算素材优先', !isMaterialFirst('   ') && !isMaterialFirst('') && !isMaterialFirst(null))
+check('1i 素材优先固定 2500 字', MATERIAL_FIRST_LENGTH === 2500)
+
 /* 2. 选中的维度必须原样保留，且不会再被随机补第二个 */
 const manual = resolveComboTags({
   combo: { genre: ['都市悬疑'], pov: ['第一人称'], length: 800 },
@@ -86,6 +110,26 @@ check('5a 同 Seed + 同 variant → 完全一致', JSON.stringify(s0) === JSON.
 check('5b 同 Seed 换 variant → skeletonSeed 不变', s0.skeletonSeed === s1.skeletonSeed)
 check('5c 同 Seed 换 variant → surfaceSeed 变化', s0.surfaceSeed !== s1.surfaceSeed)
 check('5d 同 Seed 换 variant → proseSeed 变化', s0.proseSeed !== s1.proseSeed)
+
+/* 5e. 素材参与 Seed 派生：同 Seed 换素材不能复用上一份骨架 */
+const MATERIAL_A = '我叫贺牧。权穆失踪后的第七天，我在他租住的公寓里找到一只铁盒。'
+const MATERIAL_B = '母亲把老屋卖了。我回去收拾东西时，在墙缝里摸到一沓没寄出的信。'
+const m0 = deriveSeeds('story-2026', 0, MATERIAL_A)
+const m0Again = deriveSeeds('story-2026', 0, MATERIAL_A)
+const m1 = deriveSeeds('story-2026', 1, MATERIAL_A)
+const mB = deriveSeeds('story-2026', 0, MATERIAL_B)
+const mBlank = deriveSeeds('story-2026', 0, '   ')
+check('5e 同 Seed + 同素材 → 派生 Seed 完全一致', JSON.stringify(m0) === JSON.stringify(m0Again))
+check('5f 同 Seed + 同素材换 variant → skeletonSeed 不变', m0.skeletonSeed === m1.skeletonSeed)
+check(
+  '5g 同 Seed 换素材 → skeletonSeed 变化（不能捞回上一份骨架）',
+  m0.skeletonSeed !== mB.skeletonSeed && m0.surfaceSeed !== mB.surfaceSeed
+)
+check(
+  '5h 有素材与没素材的骨架 Seed 不同（素材另开一套复现空间）',
+  m0.skeletonSeed !== s0.skeletonSeed
+)
+check('5i 空白素材 = 没素材', mBlank.skeletonSeed === s0.skeletonSeed)
 
 /* 6. 写法：未选时随机，不再默认 A */
 const skills: StorySkill[] = ['A', 'B', 'C', 'D', 'E', 'F'].map((code) => ({

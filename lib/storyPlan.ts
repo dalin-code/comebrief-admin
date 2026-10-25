@@ -10,7 +10,7 @@
  * 克隆文章解决，不靠模型记忆。
  */
 import { deriveSeeds, hashString, seededPick, seededRandom } from './storySelection'
-import { findIdentityLeaks, surfaceFromSeed, type StorySurface } from './storyIdentity'
+import { findIdentityLeaks, surfaceFromSeed, type StorySurface, type SurfaceIdentity } from './storyIdentity'
 import type { DimensionKey, StoryTag } from './storyPrompt'
 
 export type StoryStateDelta = 'none' | 'additive' | 'breaking'
@@ -166,7 +166,7 @@ function finishSkeleton(
   const skeleton: StorySkeleton = {
     version: 2,
     seed: opts.seed,
-    skeletonSeed: deriveSeeds(opts.seed, 0).skeletonSeed,
+    skeletonSeed: deriveSeeds(opts.seed, 0, opts.materials).skeletonSeed,
     titleAngle: asText(raw.titleAngle, 120) || '标题落在一个具体物件或动作上',
     premise: asText(raw.premise, 500) || asText(opts.idea, 500) || '一个普通人被一件小事逼到必须做出选择',
     conflictType: asText(raw.conflictType, 160) || '一件旧事被迫重新处理',
@@ -229,7 +229,7 @@ function makeFallbackBeats(seed: string): Array<Partial<StoryBeat>> {
 
 /** 模型 JSON 解析失败 / 返回空时，本地也要给出一副能写的骨架 */
 export function fallbackSkeleton(opts: { seed: string; length: number; idea?: string; materials?: string }) {
-  const rng = seededRandom(deriveSeeds(opts.seed, 0).skeletonSeed)
+  const rng = seededRandom(deriveSeeds(opts.seed, 0, opts.materials).skeletonSeed)
   return finishSkeleton(
     {
       premise: opts.idea || '一个普通人被一件小事逼到必须做出选择',
@@ -319,8 +319,13 @@ export function mergePlan(skeleton: StorySkeleton, surface: StorySurface, seeds 
   return { skeleton, surface, seeds, fingerprint: surface.fingerprint }
 }
 
-export function surfaceForSkeleton(skeleton: StorySkeleton, seed: string, variantIndex: number) {
-  return surfaceFromSeed({ seed, variantIndex, skeleton })
+export function surfaceForSkeleton(
+  skeleton: StorySkeleton,
+  seed: string,
+  variantIndex: number,
+  forbiddenIdentities?: SurfaceIdentity[]
+) {
+  return surfaceFromSeed({ seed, variantIndex, skeleton, forbiddenIdentities })
 }
 
 const SKELETON_SYSTEM = [
@@ -373,28 +378,47 @@ export function buildSkeletonUserPrompt(input: {
 }) {
   const material = String(input.materials || '').trim().slice(0, 4000)
   const avoid = (input.avoidTitles || []).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 12)
-  const parts = [
-    '【本次的标签设定】',
-    renderTags(input.tagsByDimension) || '（没有指定，按故事需要自行取舍）',
-    '',
-    '【站长的构思】',
-    String(input.idea || '').trim() || '（没有额外构思，按标签写一个具体的故事）',
-  ]
+  const ideaText = String(input.idea || '').trim()
+
+  const parts: string[] = []
   if (material) {
+    // 素材优先：底本是故事逻辑的唯一来源，标签/构思只决定怎么讲
     parts.push(
+      '【改编底本（这是这一篇的情节主干，必须照它拆节拍）】',
+      '先通读底本，把它的核心冲突、人物关系、关键事件、因果、反转与结局方向拆成 4–6 个节拍。',
+      '标签和构思只决定叙述方式（文风 / 视角 / 节奏），不得替换底本的人物关系、事件、因果或结局。',
+      '人物一律写成「主角 / 对手 / 关键关系人」，地点一律写「某个地方」，不许照抄底本里的人名地名。',
+      material,
       '',
-      '【改编底本（只提炼情节功能，不许照抄人名地名）】',
-      '把下面素材里的人物关系、关键事件、因果、反转、结局方向拆成节拍；',
-      '人物一律写成「主角 / 对手 / 关键关系人」，地点一律写「某个地方」。',
-      material
+      '【本次的标签设定（只影响文风 / 人称 / 节奏等表层，不得改变上面的改编底本）】',
+      renderTags(input.tagsByDimension) || '（没有额外标签：按底本自行决定叙述方式，情节照底本。）',
+      '',
+      '【站长的构思（优先于底本；为空则完全按底本）】',
+      ideaText || '（没有额外构思，按底本的情节主干拆节拍）'
+    )
+  } else {
+    parts.push(
+      '【本次的标签设定】',
+      renderTags(input.tagsByDimension) || '（没有指定，按故事需要自行取舍）',
+      '',
+      '【站长的构思】',
+      ideaText || '（没有额外构思，按标签写一个具体的故事）'
     )
   }
   if (avoid.length) {
-    parts.push('', '【往期标题（这次的故事逻辑要和它们不同）】', avoid.map((x) => `《${x}》`).join('、'))
+    parts.push(
+      '',
+      material
+        ? '【往期标题（只要求底本没写到的部分和它们不同，不许为了求新改掉底本情节）】'
+        : '【往期标题（这次的故事逻辑要和它们不同）】',
+      avoid.map((x) => `《${x}》`).join('、')
+    )
   }
   parts.push(
     '',
-    `【篇幅】目标 ${input.length} 字，按 4–6 段分配；每段只承担一个功能。`,
+    material
+      ? `【篇幅】目标 ${input.length} 字（素材优先：写满，把底本的因果与结局完整走完），按 4–6 段分配；每段只承担一个功能。`
+      : `【篇幅】目标 ${input.length} 字，按 4–6 段分配；每段只承担一个功能。`,
     `【Seed】${input.seed}（只用于复现，不要写进故事）`,
     '',
     '再次强调：只输出 JSON 骨架，不写人名、地名、对白和正文。'

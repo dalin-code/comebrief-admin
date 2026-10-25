@@ -3,6 +3,7 @@ import { htmlToPlainText, isAbortError, jsonResponse, requireAdmin } from '@/lib
 import { callText } from '@/lib/aiProvider'
 import { getSupabaseAdminClient } from '@/lib/supabaseAdmin'
 import { loadSkill } from '@/lib/storySkills'
+import { isMaterialFirst } from '@/lib/storySelection'
 import { buildReviewSystemPrompt, buildReviewUserPrompt, parseStoryReview } from '@/lib/storyReview'
 
 export const runtime = 'nodejs'
@@ -30,6 +31,8 @@ export async function POST(req: NextRequest) {
     const html = String(body?.html || '').trim()
     const bodyText = (text || htmlToPlainText(html) || '').trim()
     const targetLength = Number(body?.length) || 0
+    // 素材优先时，正文可能是在「没有写法」的情况下写的；评审不能偷偷拿默认写法当尺子
+    const materials = String(body?.materials || '').trim().slice(0, 4000)
     // 站长自己写的评价与想法 —— 让 AI 在报告里正面回应他关心的位置（打分锚点不变）
     const notes = String(body?.notes || '').trim().slice(0, 800)
 
@@ -39,8 +42,12 @@ export async function POST(req: NextRequest) {
     const admin = getSupabaseAdminClient()
     if (!admin.ok) return jsonResponse({ error: admin.error }, 500)
 
-    // 评审也要知道「这篇按哪套写法写的」—— style 这一维就是拿它当尺子
-    const chosen = await loadSkill(admin.client, body?.skill)
+    // 评审也要知道「这篇按哪套写法写的」—— style 这一维就是拿它当尺子。
+    // 素材优先且没选写法时，正文就是按底本平实写的：不回落默认写法，按「无写法」评 AI 味。
+    const chosen: Awaited<ReturnType<typeof loadSkill>> =
+      isMaterialFirst(materials) && !String(body?.skill || '').trim()
+        ? { row: null }
+        : await loadSkill(admin.client, body?.skill)
 
     const ai = await callText({
       task: 'revise',

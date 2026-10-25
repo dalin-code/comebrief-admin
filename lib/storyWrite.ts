@@ -132,13 +132,21 @@ export function buildSectionUserPrompt(input: {
     )
   }
 
-  if (input.tagBrief) parts.push('', '【写法 / 标签约束】', input.tagBrief)
-  if (String(input.idea || '').trim()) parts.push('', '【站长的总体构思】', String(input.idea).trim().slice(0, 800))
-  if (String(input.materials || '').trim()) {
+  const material = String(input.materials || '').trim().slice(0, 4000)
+  if (input.tagBrief) {
     parts.push(
       '',
-      '【改编底本（只参照情节功能；其中的人名地名一律换成上面的表皮设定，不许照抄）】',
-      String(input.materials).trim().slice(0, 4000)
+      material ? '【写法 / 标签约束（只改文风 / 人称 / 节奏，不改上面的骨架与底本情节）】' : '【写法 / 标签约束】',
+      input.tagBrief
+    )
+  }
+  if (String(input.idea || '').trim()) parts.push('', '【站长的总体构思】', String(input.idea).trim().slice(0, 800))
+  if (material) {
+    parts.push(
+      '',
+      '【改编底本（上面的骨架已经从它提炼；本段必须沿着它的情节主干写）】',
+      '其中的人名地名一律换成上面的表皮设定，不许照抄；但不许改掉底本的人物关系、关键事件、因果、反转或结局方向。',
+      material
     )
   }
   if (previousText) {

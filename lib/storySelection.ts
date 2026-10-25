@@ -70,6 +70,57 @@ export function normalizeSeed(input: unknown) {
   return s || makeSeed()
 }
 
+/** 一次批量最多生成几篇草稿（再多会让站长等太久，也更容易写出同质化的一组） */
+export const MAX_BATCH_STORIES = 5
+
+/** 单篇参考素材的字数上限（与 API 的 4000 字截断保持一致） */
+export const MAX_MATERIAL_CHARS = 4000
+
+/**
+ * 有参考素材时固定写多长。
+ *
+ * 素材是情节主干，不是一句氛围参考：1500 字经常只够把底本的开头和转折写完，
+ * 结局只能一句带过；800 字更会把人物关系压没。所以素材模式统一按长篇写，
+ * 让模型有空间把「起因 → 试探 → 代价 → 揭示 → 结局」走完整。
+ */
+export const MATERIAL_FIRST_LENGTH = 2500
+
+/** 这一次是不是「素材优先」：只要填了素材，情节就必须以素材为准 */
+export function isMaterialFirst(materials: unknown) {
+  return String(materials ?? '').trim().length > 0
+}
+
+/**
+ * 多篇参考素材按顺序对应批量篇目：`list[0]` → 第 1 篇，`list[1]` → 第 2 篇。
+ *
+ * 保留空字符串占位：站长删掉第 2 篇素材时，第 3 篇不能悄悄顶上来改成第 2 篇。
+ * 不是数组（旧版只有一篇 `materials`）时返回空数组，交给调用方兼容。
+ */
+export function normalizeMaterialList(input: unknown): string[] {
+  if (!Array.isArray(input)) return []
+  return input
+    .slice(0, MAX_BATCH_STORIES)
+    .map((item) => String(item ?? '').trim().slice(0, MAX_MATERIAL_CHARS))
+}
+
+/**
+ * 批量生成的第 index 篇用哪个 Seed。
+ *
+ * 第 0 篇就是站长填的那个 Seed；后面的优先用「数字 + 1」——这样站长下次把
+ * 同一个数字填回来，仍然能逐篇复现整批。纯数字只处理到 int32 边界，超出或
+ * 不是数字就用 `-b2` 这样的后缀，保证不撞车也不丢可读性。
+ */
+export function deriveBatchSeed(seedInput: unknown, indexInput: unknown) {
+  const base = normalizeSeed(seedInput)
+  const index = Math.min(MAX_BATCH_STORIES - 1, Math.max(0, Math.trunc(Number(indexInput) || 0)))
+  if (index === 0) return base
+  if (/^\d{1,10}$/.test(base)) {
+    const n = Number(base)
+    if (Number.isSafeInteger(n) && n + index <= 2_147_483_646) return String(n + index)
+  }
+  return `${base}-b${index + 1}`
+}
+
 /** FNV-1a 32 位。稳定、无依赖，用来派生各层 Seed / 指纹。 */
 export function hashString(input: string) {
   let h = 0x811c9dc5
@@ -115,19 +166,29 @@ export function seededShuffle<T>(list: T[], rng: () => number): T[] {
 /**
  * 同一 Seed + 同一 variantIndex → 同一组派生 Seed。
  * 骨架层完全不看 variantIndex；表皮 / 正文层看，所以「换一版」会换人换景。
+ *
+ * 有参考素材时，素材正文也参与派生：站长换了素材却沿用同一个 Seed 时，
+ * 不能再从 story_recipes 里捞出上一份素材的骨架（那正是「换素材还是同一个故事」）。
+ * 同一份素材 + 同一个 Seed 仍然逐篇复现。
  */
-export function deriveSeeds(seedInput: unknown, variantIndexInput: unknown): DerivedSeeds {
+export function deriveSeeds(
+  seedInput: unknown,
+  variantIndexInput: unknown,
+  materialsInput?: unknown
+): DerivedSeeds {
   const seed = normalizeSeed(seedInput)
   const variantIndex = clampVariantIndex(variantIndexInput)
-  const sk = hashString(`${seed}|skeleton`).toString(36)
-  const sf = hashString(`${seed}|surface|${variantIndex}`).toString(36)
-  const pr = hashString(`${seed}|prose|${variantIndex}`).toString(36)
+  const material = String(materialsInput ?? '').trim()
+  const scope = material ? `${seed}|material|${hashString(material).toString(36)}` : seed
+  const sk = hashString(`${scope}|skeleton`).toString(36)
+  const sf = hashString(`${scope}|surface|${variantIndex}`).toString(36)
+  const pr = hashString(`${scope}|prose|${variantIndex}`).toString(36)
   return {
     seed,
     variantIndex,
-    skeletonSeed: `${seed}-sk-${sk}`,
-    surfaceSeed: `${seed}-sf-${variantIndex}-${sf}`,
-    proseSeed: `${seed}-pr-${variantIndex}-${pr}`,
+    skeletonSeed: `${seed}-${material ? 'm' : 'sk'}-${sk}`,
+    surfaceSeed: `${seed}-${material ? 'ms' : 'sf'}-${variantIndex}-${sf}`,
+    proseSeed: `${seed}-${material ? 'mp' : 'pr'}-${variantIndex}-${pr}`,
   }
 }
 
@@ -160,10 +221,16 @@ export function normalizeCombo(input: unknown): StoryCombo {
   const rawLength = Number(raw.length)
   out.length = LENGTHS.has(rawLength) ? rawLength : 1500
   const idea = String(raw.idea ?? '').trim().slice(0, 800)
-  const materials = String(raw.materials ?? '').trim().slice(0, 4000)
+  const materials = String(raw.materials ?? '').trim().slice(0, MAX_MATERIAL_CHARS)
+  const materialsList = normalizeMaterialList(raw.materialsList)
   const skill = String(raw.skill ?? '').trim().slice(0, 24)
   if (idea) out.idea = idea
   if (materials) out.materials = materials
+  if (materialsList.some(Boolean)) {
+    out.materialsList = materialsList
+    // 旧代码只读 `materials`：第一篇有素材时保持这个字段可用。
+    if (!materials && materialsList[0]) out.materials = materialsList[0]
+  }
   if (skill) out.skill = skill
   const seed = String(raw.seed ?? '').trim().slice(0, 80)
   if (seed) out.seed = seed
@@ -195,9 +262,16 @@ export function resolveComboTags(input: {
   combo: unknown
   tagsByDimension: ComboTagMap
   rng?: () => number
+  /**
+   * 未选维度要不要随机补全。
+   * 有参考素材时传 false：此时情节由素材决定，随机标签只会把人物关系 / 事件 / 结局
+   * 往另一条路上拽。手动选中的标签仍然保留（它们只影响文风、人称等表层）。
+   */
+  randomFill?: boolean
 }): ResolveComboResult {
   const normalized = normalizeCombo(input.combo)
   const rng = input.rng || Math.random
+  const randomFill = input.randomFill !== false
   const pickedNames: Partial<Record<DimensionKey, string[]>> = {}
   const tagsByDimension: ComboTagMap = {}
   const randomFilled: DimensionKey[] = []
@@ -214,7 +288,7 @@ export function resolveComboTags(input: {
     if (missing.length) warnings.push(`标签库里找不到「${missing.join('、')}」，已跳过`)
 
     let picked = valid.slice(0, d.max)
-    if (!picked.length && pool.length) {
+    if (!picked.length && pool.length && randomFill) {
       // 1 个还是 2 个也随机：站长没选，就别替他固定成「每次都只抽一个」
       const count = d.max > 1 && rng() < 0.35 ? d.max : 1
       picked = seededShuffle(pool, rng).slice(0, count)
@@ -230,6 +304,7 @@ export function resolveComboTags(input: {
   const combo: StoryCombo = { length: normalized.length || 1500 }
   if (normalized.idea) combo.idea = normalized.idea
   if (normalized.materials) combo.materials = normalized.materials
+  if (normalized.materialsList?.length) combo.materialsList = normalized.materialsList
   if (normalized.skill) combo.skill = normalized.skill
   if (normalized.seed) combo.seed = normalized.seed
   if (normalized.variantIndex !== undefined) combo.variantIndex = normalized.variantIndex

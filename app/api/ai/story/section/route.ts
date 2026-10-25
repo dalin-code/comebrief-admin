@@ -4,7 +4,7 @@ import { callText } from '@/lib/aiProvider'
 import { countChineseChars, htmlToPlainText, parseDelimitedStory, toStoryHtml } from '@/lib/storyPrompt'
 import { loadSkill } from '@/lib/storySkills'
 import { getSupabaseAdminClient } from '@/lib/supabaseAdmin'
-import { deriveSeeds, normalizeSeed, seedToInt } from '@/lib/storySelection'
+import { deriveSeeds, isMaterialFirst, MATERIAL_FIRST_LENGTH, normalizeSeed, seedToInt } from '@/lib/storySelection'
 import { normalizeSkeleton } from '@/lib/storyPlan'
 import { coerceSurface } from '@/lib/storyIdentity'
 import {
@@ -49,10 +49,16 @@ export async function POST(req: NextRequest) {
     const idea = String(body?.idea || '').trim().slice(0, 800)
     const materials = String(body?.materials || '').trim().slice(0, 4000)
     const rawLength = Number(body?.length ?? body?.skeleton?.targetChars)
-    const length = [800, 1500, 2500].includes(rawLength) ? rawLength : 1500
+    const requestedLength = [800, 1500, 2500].includes(rawLength) ? rawLength : 1500
+    // 素材优先：骨架在 1500 字下会把底本后半段压成总结，这里兜一层保险
+    const materialFirst = isMaterialFirst(materials)
+    const length = materialFirst ? MATERIAL_FIRST_LENGTH : requestedLength
     const seed = normalizeSeed(body?.seed)
     const variantIndex = Math.max(0, Math.trunc(Number(body?.variantIndex) || 0))
-    const seeds = body?.seeds && typeof body.seeds === 'object' ? body.seeds : deriveSeeds(seed, variantIndex)
+    const seeds =
+      body?.seeds && typeof body.seeds === 'object'
+        ? body.seeds
+        : deriveSeeds(seed, variantIndex, materials)
     const skeleton = normalizeSkeleton(body?.skeleton, { seed, length, idea, materials })
     const sectionIndex = Math.max(0, Math.min(skeleton.beats.length - 1, Math.trunc(Number(body?.sectionIndex) || 0)))
     const beat = skeleton.beats[sectionIndex]
@@ -63,7 +69,12 @@ export async function POST(req: NextRequest) {
 
     const admin = getSupabaseAdminClient()
     if (!admin.ok) return jsonResponse({ error: admin.error }, 500)
-    const chosen = await loadSkill(admin.client, body?.skill)
+    // 素材优先且没选写法时，不回落默认写法：默认腔调会覆盖底本的叙述方式；
+    // 前半篇若随机抽过写法，前端会把 preview.skill.code 传回来，仍能保持一致。
+    const chosen: Awaited<ReturnType<typeof loadSkill>> =
+      materialFirst && !String(body?.skill || '').trim()
+        ? { row: null }
+        : await loadSkill(admin.client, body?.skill)
     const warnings = chosen.warning ? [chosen.warning] : []
 
     const basePrompt = {

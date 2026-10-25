@@ -4,7 +4,14 @@ import { callText } from '@/lib/aiProvider'
 import { countChineseChars, htmlToPlainText, parseDelimitedStory, toStoryHtml } from '@/lib/storyPrompt'
 import { loadSkill } from '@/lib/storySkills'
 import { getSupabaseAdminClient } from '@/lib/supabaseAdmin'
-import { deriveSeeds, hashString, normalizeSeed, seedToInt } from '@/lib/storySelection'
+import {
+  deriveSeeds,
+  hashString,
+  isMaterialFirst,
+  MATERIAL_FIRST_LENGTH,
+  normalizeSeed,
+  seedToInt,
+} from '@/lib/storySelection'
 import { normalizeSkeleton } from '@/lib/storyPlan'
 import { coerceSurface } from '@/lib/storyIdentity'
 import { buildFinalizeSystemPrompt, buildFinalizeUserPrompt } from '@/lib/storyWrite'
@@ -46,10 +53,15 @@ export async function POST(req: NextRequest) {
     const idea = String(body?.idea || '').trim().slice(0, 800)
     const materials = String(body?.materials || '').trim().slice(0, 4000)
     const rawLength = Number(body?.length ?? body?.skeleton?.targetChars)
-    const length = [800, 1500, 2500].includes(rawLength) ? rawLength : 1500
+    const requestedLength = [800, 1500, 2500].includes(rawLength) ? rawLength : 1500
+    const materialFirst = isMaterialFirst(materials)
+    const length = materialFirst ? MATERIAL_FIRST_LENGTH : requestedLength
     const seed = normalizeSeed(body?.seed)
     const variantIndex = Math.max(0, Math.trunc(Number(body?.variantIndex) || 0))
-    const seeds = body?.seeds && typeof body.seeds === 'object' ? body.seeds : deriveSeeds(seed, variantIndex)
+    const seeds =
+      body?.seeds && typeof body.seeds === 'object'
+        ? body.seeds
+        : deriveSeeds(seed, variantIndex, materials)
     const skeleton = normalizeSkeleton(body?.skeleton, { seed, length, idea, materials })
     const surface = coerceSurface(body?.surface, { seed, variantIndex, skeleton })
 
@@ -73,7 +85,10 @@ export async function POST(req: NextRequest) {
 
     const admin = getSupabaseAdminClient()
     if (!admin.ok) return jsonResponse({ error: admin.error }, 500)
-    const chosen = await loadSkill(admin.client, body?.skill)
+    const chosen: Awaited<ReturnType<typeof loadSkill>> =
+      materialFirst && !String(body?.skill || '').trim()
+        ? { row: null }
+        : await loadSkill(admin.client, body?.skill)
     const warnings: string[] = []
     if (chosen.warning) warnings.push(chosen.warning)
 

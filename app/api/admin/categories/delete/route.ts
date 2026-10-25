@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server'
 import { getSupabaseWriteClient } from '@/lib/supabaseAdmin'
 import { getBearer, jsonResponse, requireAdmin } from '@/lib/aiGemini'
+import { notifyFrontendRevalidate } from '@/lib/revalidateFrontend'
 
 export const runtime = 'nodejs'
 
@@ -14,8 +15,11 @@ const PAGE = 1000
  * 从后台「话题矩阵」里删掉一个话题。
  *
  * 为什么不能像以前那样在前端直接 `.delete()` 了事：
- *   直接删只会把 `articles.category` 留成一个谁也不认识的值 —— 前台页签是按
- *   文章里的分类现算的，于是「后台已经删了，前台还挂着一个页签」。
+ *   2026-10-16 起，前台页签的真源就是这张 `categories` 表（ComeBrief
+ *   `lib/categories.ts` 的 `categoryTabs` 照抄后台矩阵的顺序与成员）。删掉矩阵
+ *   里那一行，页签确实会消失 —— 但名下的文章还写着这个名字，于是前台会把它当成
+ *   「文章里有、矩阵里没有」的话题，按字母序补在页签最后：站长在后台再也管不到
+ *   它，点进去却还是一堆散稿。
  *   所以删除必须分两步：**先把名下的文章并进兜底话题 `Other`，再删话题本身**。
  *
  * 为什么走服务端而不是继续留在浏览器里：
@@ -35,9 +39,9 @@ const PAGE = 1000
  *   前台立刻多出一个 `Sport(s)` 页签。这里统一按小写比较，再把命中过的
  *   原始写法逐个精确更新（不敢用 `ilike`：`%` / `_` 在话题名里会被当通配符）。
  *
- * 兜底话题 `Other` 自己不给删：它是所有被删话题的收容所，删了就没地方安置；
- * 而它在前台本来就是「有文章才显示、没文章自动隐藏」（见 ComeBrief 的
- * `lib/categories.ts` 的 `categoryTabs`）。
+ * 兜底话题 `Other` 自己不给删：它是所有被删话题的收容所，删了就没地方安置。
+ * （前台页签现在照抄这张矩阵，所以 `Other` 会一直显示 —— 这正是它该有的样子：
+ *  被删话题名下的文章都并进这里。见 ComeBrief `lib/categories.ts` 的 `categoryTabs`。）
  */
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req)
@@ -75,58 +79,90 @@ export async function POST(req: NextRequest) {
   const { data: existingRows } = await client.from('categories').select('name').eq('name', name).limit(1)
   const existed = Boolean(existingRows && existingRows.length > 0)
 
-  // 1) 找出所有「忽略大小写等于 name」的文章分类写法（例如 Sports / SPORTS 混用）
+  // 1) 找出所有引用了这个话题的文章（忽略大小写）。
+  //    2026-10 起一篇文章可以有多个话题（articles.categories text[]），所以这里
+  //    不能像旧版那样「按单值 category 一锅端」：那样做会把同一篇文章的其它
+  //    话题一起抹掉。正确做法是逐篇把这一格从数组里摘掉，摘空了才并进 Other。
   const wanted = name.toLowerCase()
   const matched = new Set<string>()
+  type ArticleUpdate = { id: string; next: string[] }
+  const updates: ArticleUpdate[] = []
+  let categoriesAvailable = true
+
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await client
+    let res: any = await client
       .from('articles')
-      .select('category')
-      .not('category', 'is', null)
+      .select('id, category, categories')
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
 
-    if (error) {
-      console.log('[categories:delete] 读文章分类失败 ——', error.message)
-      return jsonResponse({ error: error.message }, 500)
+    if (res.error && /categories/i.test(String(res.error.message || ''))) {
+      // 迁移 45 还没跑（部署顺序反了）时退回单值读取：删话题仍然要能用。
+      categoriesAvailable = false
+      res = await client
+        .from('articles')
+        .select('id, category')
+        .order('id', { ascending: true })
+        .range(from, from + PAGE - 1)
     }
 
-    const rows = data || []
+    if (res.error) {
+      console.log('[categories:delete] 读文章分类失败 ——', res.error.message)
+      return jsonResponse({ error: res.error.message }, 500)
+    }
+
+    const rows = (res.data || []) as any[]
     for (const row of rows) {
-      const value = String((row as any)?.category ?? '').trim()
-      if (value && value.toLowerCase() === wanted) matched.add(value)
+      const list = Array.isArray(row?.categories)
+        ? row.categories.map((cat: unknown) => String(cat || '').trim()).filter(Boolean)
+        : []
+      const legacy = String(row?.category || '').trim()
+      if (legacy && !list.some((cat) => cat.toLowerCase() === legacy.toLowerCase())) list.push(legacy)
+
+      const hits = list.filter((cat) => cat.toLowerCase() === wanted)
+      if (hits.length === 0) continue
+      hits.forEach((cat) => matched.add(cat))
+
+      const next = list.filter((cat) => cat.toLowerCase() !== wanted)
+      // 被删的是最后一个话题 → 并进兜底话题；否则主话题顺延到剩下的第一个。
+      if (next.length === 0) next.push(FALLBACK_CATEGORY)
+      updates.push({ id: String(row.id), next })
     }
     if (rows.length < PAGE) break
   }
 
-  // 2) 把它们全部并进兜底话题。任何一条失败都中止（话题先不删，等站长重试）
+  // 2) 逐篇落库。任何一条失败都中止（话题先不删，等站长重试）。
+  //    回读是必须的：RLS 拦下的 UPDATE 是「200 但 0 行受影响」。
   let moved = 0
-  for (const value of matched) {
-    const { error, count } = await client
+  for (const item of updates) {
+    const next = item.next
+    const payload: Record<string, unknown> = { category: next[0] }
+    if (categoriesAvailable) payload.categories = next
+
+    const { data: changed, error } = await client
       .from('articles')
-      .update({ category: FALLBACK_CATEGORY }, { count: 'exact' })
-      .eq('category', value)
+      .update(payload)
+      .eq('id', item.id)
+      .select('id')
 
     if (error) {
-      console.log('[categories:delete] 迁移文章失败 ——', value, error.message)
+      console.log('[categories:delete] 迁移文章失败 ——', item.id, error.message)
       return jsonResponse(
-        { error: `把「${value}」的文章并进「${FALLBACK_CATEGORY}」失败：${error.message}`, via: write.via },
+        { error: `把「${name}」从这篇文章里摘掉时失败：${error.message}`, via: write.via },
         500
       )
     }
-    if (!count) {
-      // 0 行搬动 = RLS 静默拦下了 UPDATE（这个 value 是从文章里读出来的，
-      // 至少有一篇才对）。此时**不能继续删话题**，否则文章会留着孤儿分类名。
-      console.log('[categories:delete] 迁移文章 0 行 ——', value)
+    if (!changed || changed.length === 0) {
+      console.log('[categories:delete] 迁移文章 0 行 ——', item.id)
       return jsonResponse(
         {
-          error: `把「${value}」的文章并进「${FALLBACK_CATEGORY}」时 0 行受影响（写权限被 RLS 拦下了），话题未删除`,
+          error: `把「${name}」的文章并进「${FALLBACK_CATEGORY}」时 0 行受影响（写权限被 RLS 拦下了），话题未删除`,
           via: write.via,
         },
         500
       )
     }
-    moved += count
+    moved += 1
   }
 
   // 3) 兜底话题必须留在矩阵里，被删话题的文章才有地方落（缺了就补一条，非致命）
@@ -164,6 +200,10 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  console.log('[categories:delete] ok', { name, matched: [...matched], moved, deleted: removed, existed, via: write.via, userId: auth.userId })
-  return jsonResponse({ ok: true, name, moved, matched: [...matched], deleted: removed, via: write.via })
+  // 删完、文章也搬完了 —— 通知前台刷新，页签上那一格立刻消失
+  // （没配那两个变量时跳过，前台最多一分钟后自己刷新）。
+  const frontend = await notifyFrontendRevalidate('categories:delete')
+
+  console.log('[categories:delete] ok', { name, matched: [...matched], moved, deleted: removed, existed, via: write.via, userId: auth.userId, frontend })
+  return jsonResponse({ ok: true, name, moved, matched: [...matched], deleted: removed, via: write.via, frontend })
 }

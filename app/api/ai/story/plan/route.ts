@@ -6,6 +6,8 @@ import { loadRandomSkill } from '@/lib/storySkills'
 import {
   clampVariantIndex,
   deriveSeeds,
+  isMaterialFirst,
+  MATERIAL_FIRST_LENGTH,
   normalizeSeed,
   resolveComboTags,
   seedToInt,
@@ -19,7 +21,7 @@ import {
   surfaceForSkeleton,
   validateSkeleton,
 } from '@/lib/storyPlan'
-import { coerceSurface } from '@/lib/storyIdentity'
+import { coerceSurface, normalizeSurfaceIdentities, surfaceConflicts } from '@/lib/storyIdentity'
 import { loadRecipe, loadVariant, saveRecipe, saveVariant } from '@/lib/storyRecipes'
 import { DIMENSIONS, type DimensionKey, type StoryTag } from '@/lib/storyPrompt'
 
@@ -46,15 +48,21 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}))
     const mode = MODES.includes(String(body?.mode || 'full') as any) ? (String(body.mode) as (typeof MODES)[number]) : 'full'
     const rawLength = Number(body?.length ?? body?.combo?.length)
-    const length = [800, 1500, 2500].includes(rawLength) ? rawLength : 1500
+    const requestedLength = [800, 1500, 2500].includes(rawLength) ? rawLength : 1500
     const idea = String(body?.idea ?? body?.combo?.idea ?? '').trim().slice(0, 800)
     const materials = String(body?.materials ?? body?.combo?.materials ?? '').trim().slice(0, 4000)
+    // 素材优先：底本要完整走完因果与结局，800/1500 常把后半篇压成一句总结
+    const materialFirst = isMaterialFirst(materials)
+    const length = materialFirst ? MATERIAL_FIRST_LENGTH : requestedLength
     const seed = normalizeSeed(body?.seed)
     const variantIndex = clampVariantIndex(body?.variantIndex)
-    const seeds = deriveSeeds(seed, variantIndex)
+    // 素材也参与派生：换素材不能复用上一份素材的骨架
+    const seeds = deriveSeeds(seed, variantIndex, materials)
     const avoidTitles = Array.isArray(body?.avoidTitles)
       ? (body.avoidTitles as unknown[]).map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 12)
       : []
+    // 批量生成时前端把前几篇的人名/地点带上来。只影响表皮层，骨架仍然按 Seed 稳定复现。
+    const forbiddenIdentities = normalizeSurfaceIdentities(body?.forbiddenIdentities)
 
     const admin = getSupabaseAdminClient()
     if (!admin.ok) return jsonResponse({ error: admin.error }, 500)
@@ -81,10 +89,15 @@ export async function POST(req: NextRequest) {
       if (!tagsByDimension[t.dimension]) tagsByDimension[t.dimension] = []
       tagsByDimension[t.dimension]!.push(t)
     }
-    const resolved = resolveComboTags({ combo: body?.combo, tagsByDimension })
+    // 有素材时不随机补标签：情节必须由底本决定，随机标签只会把故事拽回另一条路
+    const resolved = resolveComboTags({ combo: body?.combo, tagsByDimension, randomFill: !materialFirst })
     const warnings = [...resolved.warnings]
 
-    const chosen = await loadRandomSkill(admin.client, body?.skill)
+    // 素材优先时不随机抽写法；只有站长明确选了写法才加载（写法只改腔调，不改情节）
+    const chosen: Awaited<ReturnType<typeof loadRandomSkill>> =
+      materialFirst && !String(body?.skill || '').trim()
+        ? { row: null }
+        : await loadRandomSkill(admin.client, body?.skill)
     if (chosen.warning) warnings.push(chosen.warning)
 
     const opts = { seed, length, idea, materials }
@@ -182,11 +195,16 @@ export async function POST(req: NextRequest) {
       const existing = await loadVariant(admin.client, recipe.id, variantIndex)
       if (existing.warning) warnings.push(existing.warning)
       if (existing.row?.surface) {
-        surface = coerceSurface(existing.row.surface, { seed, variantIndex, skeleton })
-        warnings.push('这个 Seed + 版本号已有表皮，直接复用了同一组人名与地点')
+        const cached = coerceSurface(existing.row.surface, { seed, variantIndex, skeleton })
+        if (surfaceConflicts(cached, forbiddenIdentities)) {
+          warnings.push('缓存里的表皮和同批已生成的文章撞了人物/地点，已按 Seed 重新抽一版')
+        } else {
+          surface = cached
+          warnings.push('这个 Seed + 版本号已有表皮，直接复用了同一组人名与地点')
+        }
       }
     }
-    if (!surface) surface = surfaceForSkeleton(skeleton, seed, variantIndex)
+    if (!surface) surface = surfaceForSkeleton(skeleton, seed, variantIndex, forbiddenIdentities)
 
     if (recipe?.id && mode === 'full') {
       const saved = await saveVariant(admin.client, {

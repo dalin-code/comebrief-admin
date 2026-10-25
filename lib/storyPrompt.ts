@@ -111,6 +111,94 @@ export function pickChineseOriginal(opts: {
   return { html: official, recovered: false }
 }
 
+/**
+ * 编辑页载入一篇双语稿时的「落位」规则。
+ *
+ * 线上真实故障（2026-10-21）：`content_html` 里躺着中文、中文原稿那一栏是空的；
+ * 编辑页又无条件把 `content_html` 塞进编辑器，于是：
+ *   · 中文页签显示的是英文列里的中文（页签和内容对不上）；
+ *   · 点翻译时 `pickChineseOriginal` 从英文列把中文捡回来，但保存时另一份中文
+ *     仍可能被当成英文写回 `content_html` —— 前台继续挂中文。
+ *
+ * 这里把「哪一份正文属于哪一边」收敛成一个纯函数，载入 / 保存 / 测试共用：
+ *   ① `htmlEn` 明显是中文 → 它就是中文原稿；中文原稿为空时搬过去，然后清空
+ *      `htmlEn`（英文列绝不能存中文，前台只读这一列）；
+ *   ② 标题 / 摘要同理（短文本用 minChars = 1 判断，一个中文标题也算中文）；
+ *   ③ 初始页签只看「实际有没有内容」：有英文就停英文，只有中文就停中文。
+ *      新建稿两边都空 → 停中文（先写原稿，再翻译）。
+ *
+ * 返回的 `recovered` 只用于提示站长「刚才那份中文是从英文页签里搬回来的」，
+ * 不改变任何正文内容（除非它本来就在错误的列里）。
+ */
+export type BilingualDraftInput = {
+  titleEn?: string | null
+  titleZh?: string | null
+  excerptEn?: string | null
+  excerptZh?: string | null
+  htmlEn?: string | null
+  htmlZh?: string | null
+}
+
+export type BilingualDraft = {
+  titleEn: string
+  titleZh: string
+  excerptEn: string
+  excerptZh: string
+  htmlEn: string
+  htmlZh: string
+  /** 打开编辑页时该停在哪一边 */
+  initialLang: 'zh' | 'en'
+  /** 是否从错误的列里救回了内容（用于给站长一句提示） */
+  recovered: boolean
+}
+
+export function resolveBilingualDraft(input: BilingualDraftInput): BilingualDraft {
+  let titleEn = String(input.titleEn || '').trim()
+  let titleZh = String(input.titleZh || '').trim()
+  let excerptEn = String(input.excerptEn || '').trim()
+  let excerptZh = String(input.excerptZh || '').trim()
+  let htmlEn = String(input.htmlEn || '').trim()
+  let htmlZh = String(input.htmlZh || '').trim()
+  let recovered = false
+
+  // 英文正文列里是中文：中文原稿空着就搬过去，然后两边都不再留错位内容。
+  // 20 字而不是 isMostlyChinese 默认的 80：正文短到 40–79 字也一样会被发布，
+  // 不能因为「不够一篇原稿」就放它进 content_html。
+  if (isMostlyChinese(htmlToPlainText(htmlEn), 20)) {
+    if (!htmlZh) htmlZh = htmlEn
+    htmlEn = ''
+    recovered = true
+  }
+
+  // 标题短，不能用 80 字的门槛；只要「像中文」就搬。
+  if (isMostlyChinese(titleEn, 1)) {
+    if (!titleZh) titleZh = titleEn
+    titleEn = ''
+    recovered = true
+  }
+  if (isMostlyChinese(excerptEn, 1)) {
+    if (!excerptZh) excerptZh = excerptEn
+    excerptEn = ''
+    recovered = true
+  }
+
+  // 初始页签优先看「正文」：有英文正文就按前台视角停在英文；只有中文正文
+  // 就停在中文原稿（哪怕英文标题已经存在，也不能让站长对着一个空正文页签）。
+  // 两边都没有正文时，才按标题 / 摘要判断；全新空稿停中文。
+  const hasEnglishBody = Boolean(htmlEn)
+  const hasChineseBody = Boolean(htmlZh)
+  const hasEnglish = Boolean(titleEn || excerptEn)
+  const initialLang: 'zh' | 'en' = hasEnglishBody
+    ? 'en'
+    : hasChineseBody
+      ? 'zh'
+      : hasEnglish
+        ? 'en'
+        : 'zh'
+
+  return { titleEn, titleZh, excerptEn, excerptZh, htmlEn, htmlZh, initialLang, recovered }
+}
+
 /** HTML 正文 → 纯文本（翻译、摘要、字数统计都要先看纯文本） */
 export const htmlToPlainText = (html: string) =>
   String(html || '')
@@ -157,6 +245,11 @@ export type StoryCombo = Partial<Record<DimensionKey, string[]>> & {
   length?: number
   idea?: string
   materials?: string
+  /**
+   * 批量用的多篇参考素材：第 1 项对应第 1 篇、第 2 项对应第 2 篇……
+   * 空字符串是「保留位」——删中间一条时不能让后面的素材错位。
+   */
+  materialsList?: string[]
   /**
    * 写法 code（A–F）。留空 = 每次从启用写法里随机抽一个；
    * 注意：不再回落到 story_skills.is_default（那会让「未选」永远等于 A）。
@@ -303,10 +396,11 @@ function buildStoryRules() {
 const ADAPT_MATERIAL_HEADER = '【改编底本（这是这一篇的情节主干，必须照它写）】'
 
 const ADAPT_MATERIAL_RULES = [
-  '下面这段是站长给的原始故事 / 梗概。你要做的是把它改编成一篇符合上面标签设定的中文短篇：',
+  '下面这段是站长给的原始故事 / 梗概。你要做的是把它改编成一篇中文短篇：',
   '- 主要人物及其关系、关键事件与因果、真相与反转、结局方向 —— 一律照它来。不许另起一个故事，不许把它的核心场景换掉。',
   '- 它没写到的部分（怎么开场、对话、动作、细节、过渡）由你补足；补的内容必须与它一致，不能引入与它冲突的新情节。',
-  '- 可以按上面的【题材 / 时代 / 视角 / 风格】调整人名、地名、人称与文风。',
+  '- 标签和写法只决定「怎么讲」：文风、人称、节奏、句子长短可以按它们调整，但不得改变底本的人物关系、关键事件、因果、反转与结局方向。',
+  '- 可以按上面的【题材 / 时代 / 视角 / 风格】调整人名、地名、人称与文风 —— 仅限表层，不许借机换掉底本的情节。',
   '- 句子用你自己的写法重写，不要整段照抄下面的原文。',
 ].join('\n')
 
@@ -341,8 +435,22 @@ function buildStorySetting(input: {
   const material = materials.trim().slice(0, 4000)
   const hasMaterial = !!material
 
+  /**
+   * 有素材时，标签只能改「怎么讲」。
+   * 以前这一节直接以【题材】【视角】开头，模型会把它当成和底本同等权重的设定来源，
+   * 于是给什么素材都能拐回自己的套路。现在明确降级为表层。
+   */
+  const settingsText = settingBlocks.length
+    ? settingBlocks.join('\n\n')
+    : hasMaterial
+      ? '（没有额外标签：文风、人称、节奏由你按底本自行判断；人物关系、关键事件、因果、反转与结局一律照底本。）'
+      : '（本次没有指定维度，请你自行判断最合适的写法。）'
+  const settingsBlock = hasMaterial
+    ? `【本次的标签设定（只影响文风 / 人称 / 节奏等表层，不得改变下面的改编底本）】\n${settingsText}`
+    : settingsText
+
   const parts = [
-    settingBlocks.length ? settingBlocks.join('\n\n') : '（本次没有指定维度，请你自行判断最合适的写法。）',
+    settingsBlock,
     '',
     '【本篇构思（站长的总体要求，优先于改编底本）】',
     idea.trim() ||
@@ -373,13 +481,18 @@ function buildStorySetting(input: {
   if (hasMaterial) {
     parts.push(
       '',
-      '【冲突时的优先级】站长的构思 > 改编底本的情节主干 > 默认世界设定 > 标签以外的自由发挥。',
+      '【冲突时的优先级】站长的构思 > 改编底本的情节主干 > 标签 / 写法（只影响表层） > 默认世界设定 > 自由发挥。',
       '素材已经定好的开场方式、主角配置、核心物件与冲突，一律照用，',
       '不许为了「和往期不一样」或「写得更漂亮」把它们换掉。'
     )
   }
 
-  parts.push('', `【篇幅】${length} 字左右（${lengthMin}–${lengthMax} 字之间，宁可写满也不要写短）`)
+  parts.push(
+    '',
+    hasMaterial
+      ? `【篇幅】${length} 字左右（${lengthMin}–${lengthMax} 字之间）—— 素材优先：必须写满，把底本的因果与结局完整走完，不要提前收尾。`
+      : `【篇幅】${length} 字左右（${lengthMin}–${lengthMax} 字之间，宁可写满也不要写短）`
+  )
 
   return parts.join('\n')
 }
@@ -776,7 +889,7 @@ function buildContinueBrief(input: {
     .join('\n')
 
   const parts = [
-    '【这篇的设定（保持不变）】',
+    material ? '【这篇的标签设定（只影响文风 / 人称，不改底本情节）】' : '【这篇的设定（保持不变）】',
     settings || '（保持与上文一致）',
     '',
     '【本篇构思】',
@@ -788,6 +901,7 @@ function buildContinueBrief(input: {
       '',
       '【改编底本（续写不许偏离它的情节）】',
       '接着写的那部分，仍然要沿着这份底本的情节主干往前推：素材里还没讲到的接着讲，已经讲过的不要再讲一遍。',
+      '标签和写法只延续前半篇的腔调，不许借续写改掉底本的人物关系、关键事件、因果或结局方向。',
       material
     )
   }

@@ -16,7 +16,7 @@ import {
 } from '@/lib/storyPrompt'
 import { getSupabaseAdminClient } from '@/lib/supabaseAdmin'
 import { loadRandomSkill, loadSkill } from '@/lib/storySkills'
-import { resolveComboTags } from '@/lib/storySelection'
+import { isMaterialFirst, MATERIAL_FIRST_LENGTH, resolveComboTags } from '@/lib/storySelection'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -42,9 +42,12 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}))
     const combo: StoryCombo = body?.combo && typeof body.combo === 'object' ? body.combo : {}
     const rawLength = Number(body?.length ?? combo.length)
-    const length = [800, 1500, 2500].includes(rawLength) ? rawLength : 1500
+    const requestedLength = [800, 1500, 2500].includes(rawLength) ? rawLength : 1500
     const idea = String(body?.idea ?? (combo as any).idea ?? '').trim().slice(0, 800)
     const materials = String(body?.materials ?? (combo as any).materials ?? '').trim().slice(0, 4000)
+    // 素材优先：固定按长篇写，才有空间把底本的因果与结局走完
+    const materialFirst = isMaterialFirst(materials)
+    const length = materialFirst ? MATERIAL_FIRST_LENGTH : requestedLength
     const continueFrom = String(body?.continueFrom || '').trim()
     /**
      * 最近已经写过的标题（编辑页从数据库里捞的 + 本次会话里刚生成的）。
@@ -92,7 +95,7 @@ export async function POST(req: NextRequest) {
      * 随机结果写回前端选择。旧版这里是「不选就交给模型」，模型会反复写同一套；
      * 现在每次换一组具体标签，至少保证输入不同。
      */
-    const resolved = resolveComboTags({ combo, tagsByDimension })
+    const resolved = resolveComboTags({ combo, tagsByDimension, randomFill: !materialFirst })
     warnings.push(...resolved.warnings)
 
     if (!continueFrom && !Object.keys(tagsByDimension).length && !idea) {
@@ -101,10 +104,15 @@ export async function POST(req: NextRequest) {
 
     // 写法层（story_skills）：body.skill 传 code；不传就用库里的默认写法。
     // 迁移没跑、或 code 不存在，都只进 warnings，不挡生成 —— 先把稿子写出来要紧。
-    // 续写 / 回写必须沿用同一支笔；只有「新写一篇」才在未选写法时随机抽 A–F
-    const chosen = continueFrom
-      ? await loadSkill(admin.client, body?.skill)
-      : await loadRandomSkill(admin.client, body?.skill)
+    // 续写 / 回写必须沿用同一支笔；只有「新写一篇」才在未选写法时随机抽 A–F。
+    // 素材优先时不随机抽写法：随机腔调会把底本的叙述方式也换掉。
+    const explicitSkill = String(body?.skill || '').trim()
+    const chosen: Awaited<ReturnType<typeof loadSkill>> =
+      materialFirst && !explicitSkill
+        ? { row: null }
+        : continueFrom
+          ? await loadSkill(admin.client, explicitSkill)
+          : await loadRandomSkill(admin.client, explicitSkill)
     if (chosen.warning) warnings.push(chosen.warning)
 
     // 提示词分两半发：稳定不变的「写作宪法 + 写法 + 范文」走 system（可被缓存），本篇设定走 user

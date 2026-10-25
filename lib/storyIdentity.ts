@@ -47,6 +47,101 @@ export type SurfaceSkeletonRef = {
   endingImage?: string
 }
 
+/**
+ * 表皮里「读者一眼会认成同一篇」的那几个字段。
+ *
+ * 批量生成时把它交给 /api/ai/story/plan，服务端会换掉撞车的人名/城市/地点/时间/物件。
+ * 只带文本字段，不带 fingerprint —— 前端不需要知道指纹怎么算。
+ */
+export type SurfaceIdentity = {
+  protagonistName: string
+  antagonistName: string
+  confidantName: string
+  city: string
+  place: string
+  time: string
+  objects: string[]
+}
+
+const identityText = (value: unknown) => String(value ?? '').trim().slice(0, 120)
+
+/** 从一版表皮里抽出用于查重的身份字段 */
+export function surfaceIdentity(input: {
+  protagonistName?: unknown
+  antagonistName?: unknown
+  confidantName?: unknown
+  city?: unknown
+  place?: unknown
+  time?: unknown
+  objects?: unknown
+}): SurfaceIdentity {
+  return {
+    protagonistName: identityText(input.protagonistName),
+    antagonistName: identityText(input.antagonistName),
+    confidantName: identityText(input.confidantName),
+    city: identityText(input.city),
+    place: identityText(input.place),
+    time: identityText(input.time),
+    objects: Array.isArray(input.objects)
+      ? input.objects.map(identityText).filter(Boolean).slice(0, 8)
+      : [],
+  }
+}
+
+/** API 收到的禁用身份可能是脏数据：只留下真正能用的字段，并且封顶 12 条 */
+export function normalizeSurfaceIdentities(input: unknown, max = 12): SurfaceIdentity[] {
+  if (!Array.isArray(input)) return []
+  const out: SurfaceIdentity[] = []
+  for (const raw of input) {
+    if (!raw || typeof raw !== 'object') continue
+    const item = surfaceIdentity(raw as any)
+    if (
+      !item.protagonistName &&
+      !item.antagonistName &&
+      !item.confidantName &&
+      !item.city &&
+      !item.place &&
+      !item.time &&
+      !item.objects.length
+    )
+      continue
+    out.push(item)
+    if (out.length >= max) break
+  }
+  return out
+}
+
+const objectName = (value: string) => String(value || '').replace(/（关键物件）/g, '').trim()
+
+/** 这一版表皮是否和「同批已生成的」撞了人名 / 地点 / 时间 / 关键物件 */
+export function surfaceConflicts(
+  surface: {
+    protagonistName?: string
+    antagonistName?: string
+    confidantName?: string
+    city?: string
+    place?: string
+    time?: string
+    objects?: string[]
+  },
+  forbidden: SurfaceIdentity[]
+) {
+  if (!forbidden.length) return false
+  const names = new Set(
+    [surface.protagonistName, surface.antagonistName, surface.confidantName]
+      .map((x) => String(x || '').trim())
+      .filter(Boolean)
+  )
+  const objects = new Set((surface.objects || []).map(objectName).filter(Boolean))
+  return forbidden.some((f) => {
+    if ([f.protagonistName, f.antagonistName, f.confidantName].some((x) => x && names.has(x))) return true
+    if (f.city && surface.city && f.city === surface.city) return true
+    if (f.place && surface.place && f.place === surface.place) return true
+    if (f.time && surface.time && f.time === surface.time) return true
+    return (f.objects || []).some((x) => objects.has(objectName(x)))
+  })
+}
+
 const NAMES = [
   '诺亚·班尼特', '格蕾丝·奥康奈尔', '伊莱亚斯·沃德', '玛莎·林德',
   '欧文·卡特', '莉亚·莫兰', '塞缪尔·贝克', '艾达·惠特克',
@@ -155,14 +250,33 @@ export function surfaceFromSeed(input: {
   seed: string
   variantIndex: number
   skeleton?: SurfaceSkeletonRef | null
+  /** 同批已经生成过的表皮；撞了的人名/城市/地点/时间/物件会被换掉 */
+  forbiddenIdentities?: SurfaceIdentity[]
 }): StorySurface {
   const { variantIndex } = input
   const seeds = deriveSeeds(input.seed, variantIndex)
   const rng = seededRandom(seeds.surfaceSeed)
   // 用 variant 做偏移，保证相邻变体不会因为随机流巧合选中同一组
   const offset = variantIndex * 3
+  const forbidden = input.forbiddenIdentities || []
+  const forbiddenNames = new Set(
+    forbidden.flatMap((x) => [x.protagonistName, x.antagonistName, x.confidantName]).filter(Boolean)
+  )
+  const forbiddenCities = new Set(forbidden.map((x) => x.city).filter(Boolean))
+  const forbiddenPlaces = new Set(forbidden.map((x) => x.place).filter(Boolean))
+  const forbiddenTimes = new Set(forbidden.map((x) => x.time).filter(Boolean))
+  const forbiddenObjects = new Set(forbidden.flatMap((x) => x.objects || []).map(objectName).filter(Boolean))
 
-  const names = uniqueList(NAMES, rng, 4)
+  const pickAvoiding = (list: string[], blocked: Set<string>, shift = 0) => {
+    const pool = blocked.size ? list.filter((x) => !blocked.has(x)) : list
+    return pickAt(pool.length ? pool : list, rng, offset + shift)
+  }
+
+  const names = uniqueList(
+    forbiddenNames.size ? NAMES.filter((x) => !forbiddenNames.has(x)) : NAMES,
+    rng,
+    4
+  )
   const rolesFromSkeleton = (input.skeleton?.relationshipRoles || [])
     .map((x) => String(x || '').trim())
     .filter(Boolean)
@@ -180,13 +294,16 @@ export function surfaceFromSeed(input: {
     detail: RELATIONSHIP_DETAILS[(i + offset) % RELATIONSHIP_DETAILS.length],
   }))
 
-  const city = pickAt(CITIES, rng, offset)
+  const city = pickAvoiding(CITIES, forbiddenCities)
   const district = pickAt(DISTRICTS, rng, offset + 1)
-  const place = pickAt(PLACES, rng, offset + 2)
-  const time = pickAt(TIMES, rng, offset + 3)
+  const place = pickAvoiding(PLACES, forbiddenPlaces, 2)
+  const time = pickAvoiding(TIMES, forbiddenTimes, 3)
   const season = pickAt(SEASONS, rng, offset + 4)
   const weather = pickAt(WEATHERS, rng, offset + 5)
-  const objects = uniqueList(OBJECTS, rng, 3).map((obj, i) => `${obj}${i === 0 ? '（关键物件）' : ''}`)
+  const objectPool = forbiddenObjects.size ? OBJECTS.filter((x) => !forbiddenObjects.has(x)) : OBJECTS
+  const objects = uniqueList(objectPool.length >= 3 ? objectPool : OBJECTS, rng, 3).map(
+    (obj, i) => `${obj}${i === 0 ? '（关键物件）' : ''}`
+  )
   const sensoryDetail = pickAt(SENSORY_DETAILS, rng, offset + 6)
   const backstoryHook = pickAt(BACKSTORY_HOOKS, rng, offset + 7)
 

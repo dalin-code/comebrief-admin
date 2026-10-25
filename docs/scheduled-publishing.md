@@ -58,6 +58,9 @@ CRON_SECRET=<随机长字符串>
 SUPABASE_SERVICE_ROLE_KEY=<Supabase 的 service_role key>
 ```
 
+> 本文件只讲「到点发布」。**改完之后前台多久能看到**是另一件事 ——
+> 见 `docs/cache-revalidation.md`（按需刷新缓存 + 话题矩阵与前台页签的关系）。
+
 ### 一键配（推荐）
 
 ```bash

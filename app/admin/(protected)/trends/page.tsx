@@ -23,8 +23,18 @@ const MASTER_CATEGORIES = ['Entertainment', 'Leisure', 'Emotion', 'Tech', 'Learn
 // RICH 依赖阶段 0 的 SQL（10_schema.sql）新增的字段；BASE 是永远存在的保底列。
 // 若 RICH 查询报「列不存在」，自动降级到 BASE，保证页面不会整体崩掉。
 const ARTICLE_COLS_RICH =
-  'id, title, slug, status, cover_url, category, created_at, published_at, scheduled_at, is_featured, featured_order, publish_error';
+  'id, title, slug, status, cover_url, category, categories, created_at, published_at, scheduled_at, is_featured, featured_order, publish_error';
 const ARTICLE_COLS_BASE = 'id, title, slug, status, cover_url, category, created_at';
+
+/** 一篇文章的全部话题：新列 categories 优先，旧行回退到单值 category。 */
+function rowCategories(row: any): string[] {
+  const list = Array.isArray(row?.categories)
+    ? row.categories.map((cat: unknown) => String(cat || '').trim()).filter(Boolean)
+    : [];
+  if (list.length > 0) return list;
+  const legacy = String(row?.category || '').trim();
+  return legacy ? [legacy] : [];
+}
 
 async function fetchArticleRows() {
   // 显式标注 any：降级查询返回的列更少，与 RICH 的形状不同，
@@ -117,8 +127,8 @@ export default function TrendsManagementHub() {
       const { flipped } = await publishDueRows(supabase, 'articles', data);
       data = markPublishedLocally(data, flipped);
 
-      // 历史数据里 category 为空的记录，静默补成 'AI' 后再刷新一次
-      if (data.some(r => !r.category)) {
+      // 历史数据里 category / categories 都为空的记录，静默补成 'AI' 后再刷新一次
+      if (data.some(r => rowCategories(r).length === 0)) {
         await supabase.from('articles').update({ category: 'AI' }).is('category', null);
         setRows(await fetchArticleRows());
       } else {
@@ -177,6 +187,7 @@ export default function TrendsManagementHub() {
           title,
           excerpt: `A comprehensive intelligence report on ${cat} verified by ${author.name}.`,
           category: cat,
+          categories: [cat],
           author_name: author.name,
           author_avatar: author.avatar,
           status: 'published',
@@ -229,8 +240,12 @@ export default function TrendsManagementHub() {
   const filtered = useMemo(() => rows
     // 展示状态与前台可见性规则对齐：到点的定时内容按「已发布」显示，
     // 这样后台看到的徽章和访客在 ComeBrief 上看到的永远一致。
-    .map(r => ({ ...r, display_status: effectiveStatus(r) }))
-    .filter(r => (r.title || '').toLowerCase().includes(q.toLowerCase()) || (r.category || '').toLowerCase().includes(q.toLowerCase())), [q, rows]);
+    .map(r => ({ ...r, display_status: effectiveStatus(r), display_categories: rowCategories(r) }))
+    .filter(r => {
+      const needle = q.toLowerCase();
+      return (r.title || '').toLowerCase().includes(needle)
+        || (r.display_categories as string[]).some((cat) => cat.toLowerCase().includes(needle));
+    }), [q, rows]);
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] p-4 md:p-10 font-sans selection:bg-emerald-500/30 text-slate-900">
@@ -301,7 +316,22 @@ export default function TrendsManagementHub() {
                       </div>
                     </td>
                     <td className="px-6 py-7">
-                      <span className="px-4 py-1.5 bg-slate-900 text-white text-[9px] font-black uppercase tracking-widest rounded-full flex items-center gap-2 shadow-lg w-max"><Tag size={10} className="text-emerald-400" /> {r.category || 'AI'}</span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {(r.display_categories as string[]).length > 0 ? (
+                          (r.display_categories as string[]).map((cat, idx) => (
+                            <span
+                              key={`${r.id}-${cat}`}
+                              className={`px-3 py-1.5 text-[8px] font-black uppercase tracking-widest rounded-full flex items-center gap-1.5 shadow-sm w-max ${
+                                idx === 0 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500'
+                              }`}
+                            >
+                              {idx === 0 && <Tag size={9} className="text-emerald-400" />} {cat}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="px-3 py-1.5 bg-slate-100 text-slate-400 text-[8px] font-black uppercase rounded-full">Uncategorized</span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-6 py-7 text-center">
                       <button
@@ -362,7 +392,7 @@ export default function TrendsManagementHub() {
                 <div className="flex flex-col items-center justify-center h-full gap-4 text-slate-400 font-black uppercase text-[10px] tracking-[0.5em] animate-pulse"><Loader2 className="animate-spin" size={40} /> Pulling Deep Data...</div>
               ) : (
                 <article className="max-w-3xl mx-auto prose prose-slate prose-xl selection:bg-emerald-100">
-                  <span className="px-4 py-1.5 bg-slate-900 text-white text-[10px] font-black uppercase rounded-full mb-8 inline-block">{previewData.category}</span>
+                  <span className="px-4 py-1.5 bg-slate-900 text-white text-[10px] font-black uppercase rounded-full mb-8 inline-block">{(Array.isArray(previewData.categories) ? previewData.categories.join(' · ') : '') || previewData.category}</span>
                   <h1 className="font-black italic text-5xl md:text-7xl mb-12 tracking-tighter leading-[0.95]">{previewData.title}</h1>
                   {previewData.cover_url && <img src={previewData.cover_url} className="w-full aspect-video object-cover rounded-[40px] mb-16 shadow-2xl" />}
                   {/* 🚀 正文兼容性渲染 */}

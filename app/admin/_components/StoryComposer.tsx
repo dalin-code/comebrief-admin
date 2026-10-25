@@ -1,9 +1,10 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
 import {
   X, Loader2, Sparkles, Dices, Save, Trash2, AlertTriangle, CheckCircle2, PenLine, RotateCcw,
-  ClipboardCheck, Wand2, ChevronDown, ChevronUp,
+  ClipboardCheck, Wand2, ChevronDown, ChevronUp, Layers, Plus,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { getFreshAccessToken } from '@/lib/clientAuth'
@@ -26,9 +27,17 @@ import {
   type ReviewIssue,
   type StoryReview,
 } from '@/lib/storyReview'
-import { makeSeed } from '@/lib/storySelection'
+import {
+  MATERIAL_FIRST_LENGTH,
+  MAX_BATCH_STORIES,
+  deriveBatchSeed,
+  isMaterialFirst,
+  makeSeed,
+  normalizeMaterialList,
+  normalizeSeed,
+} from '@/lib/storySelection'
 import type { StorySkeleton } from '@/lib/storyPlan'
-import type { StorySurface } from '@/lib/storyIdentity'
+import { surfaceIdentity, type StorySurface, type SurfaceIdentity } from '@/lib/storyIdentity'
 import type { StorySection } from '@/lib/storyWrite'
 
 type StorySeeds = {
@@ -63,6 +72,8 @@ export type GeneratedStory = {
   html: string
   chars: number
   warnings: string[]
+  /** 这一版实际用的改编底本；批量里每篇不同，改稿 / 换版要沿用同一份 */
+  materials?: string
   /** 服务端回执：这一版是哪套写法写的（留个痕，方便对比几版稿子） */
   skill?: { code: string; name: string } | null
   /** 这一版是不是写到模型的输出上限就断了 —— 「接着写下去」的自动补字就是看这个 */
@@ -88,6 +99,16 @@ export type GeneratedStory = {
 
 type Preset = { id: string; name: string; combo: StoryCombo; updated_at?: string }
 
+type BatchResult = {
+  index: number
+  title: string
+  draftId?: string
+  warnings: string[]
+  error?: string
+  /** 这一批一共要写几篇 —— 用来告诉站长中断后还剩几篇没生成 */
+  total?: number
+}
+
 export type StoryComposerProps = {
   open: boolean
   onClose: () => void
@@ -108,6 +129,13 @@ export type StoryComposerProps = {
 }
 
 const EMPTY_COMBO: StoryCombo = { length: 1500 }
+
+/** 读回文章 / 预设里的素材列表；旧数据只有单篇 `materials` 时兼容成一项。 */
+const materialListFromCombo = (combo: StoryCombo): string[] => {
+  const list = normalizeMaterialList(combo.materialsList)
+  if (list.some((item) => item.trim())) return list
+  return [String(combo.materials ?? '').trim()]
+}
 
 /**
  * 服务端「这次没成」的状态码 —— 不是「你不该这么做」，所以值得自动重发一次。
@@ -163,10 +191,17 @@ export function StoryComposer({
   const [presetName, setPresetName] = useState('')
   const [showPresetInput, setShowPresetInput] = useState(false)
   const [idea, setIdea] = useState('')
-  const [materials, setMaterials] = useState('')
+  /** 多篇参考素材：按顺序对应第 1..N 篇；至少保留一个输入框 */
+  const [materialInputs, setMaterialInputs] = useState<string[]>(() => materialListFromCombo(combo))
+  /** 标签库默认收起，避免七排标签一打开就铺满整屏 */
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const [preview, setPreview] = useState<GeneratedStory | null>(null)
   const [applied, setApplied] = useState(false)
-  const [busy, setBusy] = useState<'idle' | 'generate' | 'continue' | 'review' | 'rewrite' | 'section'>('idle')
+  const [busy, setBusy] = useState<'idle' | 'generate' | 'batch' | 'continue' | 'review' | 'rewrite' | 'section'>('idle')
+  /** 批量创作：一次写几篇（1 就是普通生成），以及跑到第几篇、已经落库几篇 */
+  const [batchCount, setBatchCount] = useState(1)
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; created: number } | null>(null)
+  const [batchResults, setBatchResults] = useState<BatchResult[]>([])
   /** 分段流水线的进度：规划骨架 → 逐段写 → 收尾 */
   const [progress, setProgress] = useState<{ phase: 'plan' | 'write' | 'finalize'; current: number; total: number } | null>(null)
   /** 正在重写哪一段（null = 没有单段任务） */
@@ -203,6 +238,16 @@ export function StoryComposer({
 
   const selection = combo || EMPTY_COMBO
   const length = Number(selection.length) || 1500
+  /** 单篇生成 / 续写 / 改稿只用第 1 篇素材；批量时每篇各取各的。 */
+  const materials = materialInputs[0] || ''
+  /**
+   * 素材优先模式：填了底本，情节就由底本决定。
+   * 这时篇幅固定 2500（1500 常把底本后半段压成一句总结），标签只改文风，
+   * 服务端也会强制同一套规则 —— 这里只负责把状态说清楚、把无效按钮锁掉。
+   */
+  const materialFirst = isMaterialFirst(materials)
+  const hasAnyMaterial = materialInputs.some((item) => isMaterialFirst(item))
+  const effectiveLength = materialFirst ? MATERIAL_FIRST_LENGTH : length
   const skillCode = selection.skill || ''
   const activeSkill = skills.find((s) => s.code === skillCode) || null
   const lastResolved = selection.lastResolved || null
@@ -303,6 +348,24 @@ export function StoryComposer({
     }
   }, [open])
 
+  // 打开面板 / 换文章时，把该文章保存的素材列表读回来。
+  // 注意不能把 combo 放进依赖：输入素材会同步给父组件，一放就会边打字边重置光标。
+  useEffect(() => {
+    if (!open) {
+      setShowAdvanced(false)
+      return
+    }
+    const list = materialListFromCombo(combo)
+    setMaterialInputs(list)
+    setBatchCount((prev) => Math.min(MAX_BATCH_STORIES, Math.max(prev, list.length)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, sourceArticleId])
+
+  // 标签库挂了就自动展开，别让站长对着一行「高级设置」猜为什么没标签
+  useEffect(() => {
+    if (tagError) setShowAdvanced(true)
+  }, [tagError])
+
   // 生成本来就要等十几秒 —— 给个跳动的秒数，免得以为卡死了
   useEffect(() => {
     if (busy === 'idle') return
@@ -336,6 +399,12 @@ export function StoryComposer({
   }
 
   const rerollAll = () => {
+    // 有底本时不随机补标签：随机设定会把底本的人物关系 / 事件 / 结局往另一条路拽。
+    // 想换文风请到「高级设置」里手动选，标签仍然只改表层。
+    if (hasAnyMaterial) {
+      showToast('已有改编底本：不随机抽标签。要换文风请到「高级设置」手动选。', 'error')
+      return
+    }
     const next: StoryCombo = { length, idea: selection.idea, materials: selection.materials }
     for (const d of DIMENSIONS) {
       const pool = tagsByDim[d.key] || []
@@ -350,11 +419,39 @@ export function StoryComposer({
     showToast('已随机抽一套设定 🎲', 'success')
   }
 
+  /** 素材列表的每次改动都同步进 story_combo，重开面板 / 存预设时不会丢 */
+  const commitMaterialInputs = (next: string[]) => {
+    const list = (next.length ? next : ['']).slice(0, MAX_BATCH_STORIES)
+    setMaterialInputs(list)
+    onComboChange({ ...selection, materials: list[0] || '', materialsList: list })
+  }
+
+  const updateMaterial = (index: number, value: string) => {
+    commitMaterialInputs(materialInputs.map((item, i) => (i === index ? value : item)))
+  }
+
+  const addMaterial = () => {
+    if (materialInputs.length >= MAX_BATCH_STORIES) return
+    const next = [...materialInputs, '']
+    commitMaterialInputs(next)
+    // 素材 2 默认就是「生成 2 篇」；已经手动选了更多篇时不往回缩
+    setBatchCount((prev) => Math.min(MAX_BATCH_STORIES, Math.max(prev, next.length)))
+  }
+
+  const removeMaterial = (index: number) => {
+    const next = materialInputs.length <= 1 ? [''] : materialInputs.filter((_, i) => i !== index)
+    commitMaterialInputs(next)
+    setBatchCount((prev) => Math.max(1, Math.min(prev, next.length)))
+  }
+
   const resetAll = () => {
     onComboChange({ length })
+    setMaterialInputs([''])
+    setBatchCount(1)
     setPreview(null)
     setApplied(false)
     setError('')
+    setBatchResults([])
   }
 
   /**
@@ -427,12 +524,19 @@ export function StoryComposer({
    * P4 的分段写作流水线：骨架/表皮由 /plan 给，正文一段段写，最后只让模型起标题摘要。
    * 好处是每一段都能单独重写，且“后面才揭晓的事”不会在第二段就被写掉。
    */
-  const runWritePipeline = async (plan: StoryPlanResponse) => {
+  const runWritePipeline = async (
+    plan: StoryPlanResponse,
+    options?: { sourceArticleId?: string | null; materials?: string }
+  ) => {
     const { skeleton } = plan
     const surface = plan.surface
     if (!skeleton?.beats?.length) throw new Error('规划结果里没有骨架，请重试')
     if (!surface) throw new Error('规划结果里没有人物/地点设定，请重试')
 
+    /** 批量时每篇用自己那一份素材；单篇流程不传就用输入框第一份 */
+    const writingMaterials = options?.materials === undefined ? materials : options.materials
+    // 批量里可能前面几篇有底本、后面自由创作：篇幅必须逐篇算，不能拿第一篇的状态套全批
+    const writingLength = isMaterialFirst(writingMaterials) ? MATERIAL_FIRST_LENGTH : length
     const resolvedSkill = plan.resolved?.skill || null
     const writingSkill = resolvedSkill?.code || skillCode
     const resolvedTags = plan.resolvedTags || resolvedTagsPayload(plan.resolved?.combo)
@@ -450,8 +554,8 @@ export function StoryComposer({
         sectionIndex: i,
         previousSections: sections,
         idea,
-        materials,
-        length,
+        materials: writingMaterials,
+        length: writingLength,
         skill: writingSkill,
         resolvedTags,
       })
@@ -469,11 +573,11 @@ export function StoryComposer({
       variantIndex: plan.variantIndex,
       sections,
       idea,
-      materials,
-      length,
+      materials: writingMaterials,
+      length: writingLength,
       skill: writingSkill,
       recipeId: plan.recipeId || null,
-      sourceArticleId: sourceArticleId || null,
+      sourceArticleId: options?.sourceArticleId === undefined ? sourceArticleId || null : options.sourceArticleId,
     })
 
     const sectionWarnings = sections.flatMap((s) => s.warnings || [])
@@ -482,6 +586,7 @@ export function StoryComposer({
       excerpt: String(data?.excerpt || ''),
       html: toStoryHtml(String(data?.html || sections.map((s) => s.html).join('\n'))),
       chars: Number(data?.chars || countChineseChars(htmlToPlainText(sections.map((s) => s.html).join('\n')))),
+      materials: writingMaterials,
       warnings: Array.from(
         new Set([
           ...(plan.warnings || []),
@@ -520,6 +625,7 @@ export function StoryComposer({
     // 历史只放在 lastResolved 里展示，绝不回填成选中 —— 否则同质化永远治不好。
     setBusy('generate')
     setError('')
+    setBatchResults([])
     setPreview(null)
     setApplied(false)
     setReview(null)
@@ -536,7 +642,7 @@ export function StoryComposer({
         combo: selection,
         idea,
         materials,
-        length,
+        length: effectiveLength,
         skill: skillCode,
         seed: seedValue || undefined,
         variantIndex,
@@ -575,6 +681,143 @@ export function StoryComposer({
     }
   }
 
+  /**
+   * 批量创作：一次写完 1–5 篇，每篇直接落库成「草稿」。
+   *
+   * 两件事必须同时成立，否则批量只会造出五篇像同一篇的东西：
+   *   · 每篇换一个 Seed（标题、骨架、正文都不同）；
+   *   · 把前几篇的人名/城市/地点/时间/物件作为 forbidden 传给 /plan，
+   *     服务端在表皮层避开它们 —— 读者先看到的不是「同一个主角又来了」。
+   */
+  const handleBatchGenerate = async () => {
+    if (busy !== 'idle') return
+    const total = Math.max(1, Math.min(MAX_BATCH_STORIES, Math.trunc(Number(batchCount) || 1)))
+    const baseSeed = normalizeSeed(seedValue || makeSeed())
+    let created = 0
+    let currentIndex = 0
+    let currentTitle = ''
+    setBatchResults([])
+    setBusy('batch')
+    setError('')
+    setPreview(null)
+    setApplied(false)
+    setReview(null)
+    setReviewSkill(null)
+    setPicked([])
+    setReviewNotes('')
+    setBatchProgress({ current: 1, total, created: 0 })
+    setProgress({ phase: 'plan', current: 0, total: 0 })
+    onComboChange({ ...selection, seed: baseSeed, variantIndex: 0 })
+    try {
+      const forbidden: SurfaceIdentity[] = []
+      const batchTitles: string[] = []
+      let lastPlan: StoryPlanResponse | null = null
+      let lastStory: GeneratedStory | null = null
+
+      for (let i = 0; i < total; i++) {
+        currentIndex = i
+        currentTitle = ''
+        setBatchProgress({ current: i + 1, total, created })
+        setProgress({ phase: 'plan', current: 0, total: 0 })
+        const batchSeed = deriveBatchSeed(baseSeed, i)
+        const storyMaterials = String(materialInputs[i] || '').trim()
+        const plan = (await apiPost('/api/ai/story/plan', {
+          mode: 'full',
+          combo: {
+            ...selection,
+            seed: batchSeed,
+            variantIndex: 0,
+            materials: storyMaterials,
+            materialsList: materialInputs,
+          },
+          idea,
+          materials: storyMaterials,
+          length: isMaterialFirst(storyMaterials) ? MATERIAL_FIRST_LENGTH : length,
+          skill: skillCode,
+          seed: batchSeed,
+          variantIndex: 0,
+          avoidTitles: [...batchTitles, ...sessionTitles, ...recentTitles].slice(0, 16),
+          forbiddenIdentities: forbidden,
+          sourceArticleId: null,
+        })) as StoryPlanResponse
+
+        const story = await runWritePipeline(plan, { sourceArticleId: null, materials: storyMaterials })
+        lastPlan = plan
+        lastStory = story
+        currentTitle = story.title
+        if (story.surface) forbidden.push(surfaceIdentity(story.surface))
+        batchTitles.push(story.title)
+
+        const saved = (await apiPost('/api/admin/articles/draft', {
+          title: story.title,
+          title_zh: story.title,
+          excerpt: '',
+          excerpt_zh: story.excerpt,
+          content_zh_html: story.html,
+          story_combo: {
+            ...selection,
+            materials: storyMaterials,
+            materialsList: [storyMaterials],
+            length: isMaterialFirst(storyMaterials) ? MATERIAL_FIRST_LENGTH : length,
+            seed: plan.seed,
+            variantIndex: plan.variantIndex,
+            skill: story.skill?.code || skillCode,
+            batch: { index: i + 1, total },
+          },
+          category: 'AI',
+        })) as { id?: string } | null
+        created += 1
+        setBatchResults((prev) => [
+          ...prev,
+          {
+            index: i + 1,
+            title: story.title,
+            draftId: saved?.id || '',
+            warnings: [...(plan.warnings || []), ...(story.warnings || [])],
+            total,
+          },
+        ])
+        setBatchProgress({ current: i + 1, total, created })
+      }
+
+      if (lastPlan && lastStory) {
+        onComboChange({
+          ...selection,
+          idea,
+          materials,
+          length,
+          skill: skillCode,
+          seed: baseSeed,
+          variantIndex: lastPlan.variantIndex,
+          lastResolved: {
+            combo: lastPlan.resolved?.combo || {},
+            skill: lastStory.skill || lastPlan.resolved?.skill || null,
+            seed: lastPlan.seed,
+            variantIndex: lastPlan.variantIndex,
+            at: new Date().toISOString(),
+          },
+        })
+      }
+      showToast(`已创建 ${created} 篇草稿 —— 到 TRENDS 列表逐篇检查、翻译、补封面`, 'success')
+    } catch (e: any) {
+      const message = e?.message || '批量生成失败'
+      setBatchResults((prev) => {
+        // 已经落库的那一篇在 try 里 push 过了；这里只补「中断在第几篇」
+        if (prev.some((x) => x.index === currentIndex + 1)) return prev
+        return [...prev, { index: currentIndex + 1, title: currentTitle, warnings: [], error: message, total }]
+      })
+      setError(
+        created
+          ? `批量生成中断：已经创建 ${created} 篇草稿，后面的没有继续。${message}`
+          : message
+      )
+    } finally {
+      setBusy('idle')
+      setProgress(null)
+      setBatchProgress(null)
+    }
+  }
+
   /** 发一个新 Seed：下一篇文章换一副骨架，但当前预览不丢 */
   const handleNewSeed = () => {
     onComboChange({ ...selection, seed: makeSeed(), variantIndex: 0 })
@@ -593,6 +836,8 @@ export function StoryComposer({
       return
     }
     const nextVariant = (preview.variantIndex ?? variantIndex) + 1
+    // 批量里每篇底本不同：换版必须沿用「这一版」的底本，不能抓输入框第一份
+    const baseMaterials = preview.materials ?? materials
     setBusy('generate')
     setError('')
     setApplied(false)
@@ -608,13 +853,13 @@ export function StoryComposer({
         variantIndex: nextVariant,
         combo: { ...selection, ...(preview.resolved?.combo || {}) },
         idea,
-        materials,
-        length,
+        materials: baseMaterials,
+        length: effectiveLength,
         skill: preview.skill?.code || skillCode,
         sourceArticleId: sourceArticleId || null,
       })) as StoryPlanResponse
 
-      const story = await runWritePipeline(plan)
+      const story = await runWritePipeline(plan, { materials: baseMaterials })
       onComboChange({
         ...selection,
         idea,
@@ -659,8 +904,8 @@ export function StoryComposer({
         html: current.html,
         notes: sectionNotes[index] || '',
         idea,
-        materials,
-        length,
+        materials: preview.materials ?? materials,
+        length: effectiveLength,
         skill: preview.skill?.code || skillCode,
         resolvedTags: resolvedTagsPayload(preview.resolved?.combo),
       })
@@ -732,15 +977,18 @@ export function StoryComposer({
       let rounds = 0
       let gained = 0
       let lastTruncated = false
+      // 预览可能是批量里的某一篇：续写沿用这一版自己的底本
+      const continueMaterials = preview?.materials ?? materials
 
       for (let round = 1; round <= MAX_AUTO_CONTINUE_ROUNDS; round++) {
         setContinueRound(round)
         const data = await apiPost('/api/ai/story', {
           combo: selection,
           idea,
-          materials,
-          length,
-          skill: skillCode,
+          materials: continueMaterials,
+          length: effectiveLength,
+          // 续写要沿用预览这一版实际用的写法；只传当前选择会把随机抽到的写法换掉
+          skill: preview?.skill?.code || skillCode,
           continueFrom: accText,
         })
         const pieceHtml = toStoryHtml(String(data?.html || ''))
@@ -769,14 +1017,14 @@ export function StoryComposer({
         if (!preview || applied) onAppend(pieceHtml)
 
         // 写够了、这一轮也没被截断 → 收工
-        if (!lastTruncated && countChineseChars(accText) >= length * CONTINUE_ENOUGH_RATIO) break
+        if (!lastTruncated && countChineseChars(accText) >= effectiveLength * CONTINUE_ENOUGH_RATIO) break
       }
 
       if (!rounds) {
         setError('这一轮没写出新内容。换个构思，或者把篇幅调大一点再试。')
         return
       }
-      onComboChange({ ...selection, idea, materials, length, skill: skillCode })
+      onComboChange({ ...selection, idea, materials, materialsList: materialInputs, length, skill: skillCode })
       showToast(
         lastTruncated
           ? `已续写 ${gained} 字（${rounds} 轮 · 又被输出上限截断，可以再点一次继续补）`
@@ -805,9 +1053,10 @@ export function StoryComposer({
       const data = await apiPost('/api/ai/story/review', {
         title: preview.title,
         html: preview.html,
-        length,
+        materials: preview.materials ?? materials,
+        length: effectiveLength,
         notes: reviewNotes.trim(),
-        skill: skillCode,
+        skill: preview.skill?.code || skillCode,
       })
       const r = data?.review as StoryReview
       if (!r?.scores?.length) throw new Error('自评返回的格式不对，请重试')
@@ -843,6 +1092,8 @@ export function StoryComposer({
     }
     setBusy('rewrite')
     setError('')
+    // 预览可能是批量里的某一篇：改稿沿用这一版自己的底本
+    const rewriteMaterials = preview.materials ?? materials
     try {
       const data = await apiPost('/api/ai/story/rewrite', {
         title: preview.title,
@@ -852,14 +1103,16 @@ export function StoryComposer({
         notes,
         // 构思与参考素材跟着一起传：他说「按素材改编」时，模型才拿得到那份素材
         idea,
-        materials,
-        skill: skillCode,
+        materials: rewriteMaterials,
+        // 改稿要沿用预览实际用的写法；只传当前选择会把随机抽到的写法换掉
+        skill: preview.skill?.code || skillCode,
       })
       setPreview({
         title: String(data?.title || preview.title),
         excerpt: String(data?.excerpt || ''),
         html: toStoryHtml(String(data?.html || '')),
         chars: Number(data?.chars || 0),
+        materials: rewriteMaterials,
         warnings: Array.isArray(data?.warnings) ? data.warnings.map(String) : [],
         skill: preview.skill,
       })
@@ -903,7 +1156,7 @@ export function StoryComposer({
       return
     }
     if (hasExistingContent && !applied && !window.confirm('正文里已经有中文内容了，插入会整篇替换掉它。要继续吗？')) return
-    onComboChange({ ...selection, idea, materials, length, skill: skillCode })
+    onComboChange({ ...selection, idea, materials, materialsList: materialInputs, length, skill: skillCode })
     onApply(preview)
     setApplied(true)
   }
@@ -912,7 +1165,9 @@ export function StoryComposer({
     const next: StoryCombo = { ...(p.combo || {}), length: Number(p.combo?.length) || 1500 }
     onComboChange({ ...selection, ...next })
     setIdea(String(p.combo?.idea || ''))
-    setMaterials(String(p.combo?.materials || ''))
+    const list = materialListFromCombo(next)
+    setMaterialInputs(list)
+    setBatchCount(Math.max(1, Math.min(MAX_BATCH_STORIES, list.length)))
     showToast(`已套用预设：${p.name}`, 'success')
   }
 
@@ -927,7 +1182,7 @@ export function StoryComposer({
     try {
       const { error: err } = await supabase
         .from('story_presets')
-        .insert([{ name, combo: { ...selection, idea, materials, length } }])
+        .insert([{ name, combo: { ...selection, idea, materials, materialsList: materialInputs, length } }])
       if (err) throw err
       const { data } = await supabase
         .from('story_presets')
@@ -961,8 +1216,15 @@ export function StoryComposer({
   const chosenSummary = DIMENSIONS.filter((d) => (selection[d.key] || []).length)
     .map((d) => `${d.label} ${(selection[d.key] || []).join('＋')}`)
     .join(' · ')
+  const pickedTagCount = DIMENSIONS.reduce((sum, d) => sum + (selection[d.key] || []).length, 0)
 
   const tipWidth = 240
+
+  /** 批量结果：成功几篇、中断几篇、还剩几篇没轮到 */
+  const batchOkCount = batchResults.filter((x) => !x.error).length
+  const batchErrorCount = batchResults.filter((x) => x.error).length
+  const batchTotal = Math.max(0, ...batchResults.map((x) => x.total || 0))
+  const batchSkipped = batchErrorCount ? Math.max(0, batchTotal - batchResults.length) : 0
 
   return (
     <>
@@ -984,8 +1246,9 @@ export function StoryComposer({
             <button
               type="button"
               onClick={rerollAll}
-              title="随机抽一整套设定"
-              className="w-10 h-10 flex items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-all"
+              disabled={hasAnyMaterial}
+              title={hasAnyMaterial ? '已填改编底本：不随机抽标签（可在高级设置里手动选）' : '随机抽一整套设定'}
+              className="w-10 h-10 flex items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
             >
               <Dices size={18} />
             </button>
@@ -1038,16 +1301,18 @@ export function StoryComposer({
           )}
 
           {/* 分段流水线进度：规划骨架 → 逐段写 → 收尾 */}
-          {progress && busy === 'generate' && (
+          {progress && (busy === 'generate' || busy === 'batch') && (
             <div className="p-5 rounded-3xl bg-indigo-50/70 border border-indigo-100 text-left space-y-2">
               <div className="flex items-center justify-between gap-3">
                 <span className="flex items-center gap-2 text-[11px] font-black text-indigo-700">
                   <Loader2 size={13} className="animate-spin" />
-                  {progress.phase === 'plan'
-                    ? '正在规划骨架、人物与场景…'
-                    : progress.phase === 'write'
-                      ? `正在写第 ${progress.current}/${progress.total} 段…`
-                      : '正文写完，正在起标题与摘要…'}
+                  {batchProgress
+                    ? `批量创作 ${batchProgress.current}/${batchProgress.total} 篇 · 已建 ${batchProgress.created} 篇草稿`
+                    : progress.phase === 'plan'
+                      ? '正在规划骨架、人物与场景…'
+                      : progress.phase === 'write'
+                        ? `正在写第 ${progress.current}/${progress.total} 段…`
+                        : '正文写完，正在起标题与摘要…'}
                 </span>
                 <span className="text-[10px] font-black text-indigo-400">{elapsed}s</span>
               </div>
@@ -1076,7 +1341,11 @@ export function StoryComposer({
                   <span className="text-slate-300 mr-1.5">笔法</span>
                   写法
                   <span className="ml-2 font-bold tracking-normal normal-case text-slate-300">
-                    不选 = 每次随机抽一种写法
+                    {materialFirst
+                      ? '只改腔调 · 不选 = 按底本平实改编（不随机）'
+                      : hasAnyMaterial
+                        ? '有素材的篇目不选 = 不抽写法；没素材的篇目照常随机'
+                        : '不选 = 每次随机抽一种写法'}
                   </span>
                 </label>
               </div>
@@ -1131,20 +1400,76 @@ export function StoryComposer({
             </div>
           )}
 
-          {loadingTags && (
-            <div className="flex items-center gap-3 text-[11px] font-bold text-slate-400">
-              <Loader2 size={14} className="animate-spin" /> 正在装载 48 个标签…
-            </div>
-          )}
+          {/* 高级设置：七排标签默认收起来，选过的组合仍以一行摘要露在外面 */}
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={() => setShowAdvanced((v) => !v)}
+              aria-expanded={showAdvanced}
+              className="w-full flex items-center justify-between gap-3 px-1 py-1.5 text-left group"
+            >
+              <span className="flex items-center gap-2.5 min-w-0">
+                <span className="w-8 h-8 shrink-0 rounded-2xl bg-indigo-50 text-indigo-500 flex items-center justify-center group-hover:bg-indigo-100 transition-colors">
+                  <Layers size={14} />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-[10px] font-black uppercase tracking-widest text-slate-500">
+                    高级设置
+                  </span>
+                  <span className={`block text-[9px] font-bold mt-0.5 ${tagError ? 'text-rose-500' : 'text-slate-300'}`}>
+                    {tagError
+                      ? '标签库读取失败'
+                      : loadingTags
+                        ? '正在装载标签…'
+                        : materialFirst
+                          ? '标签只改文风 / 人称 · 不随机补全'
+                          : hasAnyMaterial
+                            ? '有素材的篇目只改文风 / 人称 · 不随机补全'
+                            : '标签库 · 未选的维度每次随机抽'}
+                  </span>
+                </span>
+              </span>
+              <span className="flex items-center gap-2 shrink-0">
+                <span
+                  className={`px-2.5 py-1 rounded-full text-[9px] font-black ${
+                    pickedTagCount ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-400'
+                  }`}
+                >
+                  {pickedTagCount ? `已选 ${pickedTagCount}` : '未选'}
+                </span>
+                {showAdvanced ? (
+                  <ChevronUp size={14} className="text-slate-400" />
+                ) : (
+                  <ChevronDown size={14} className="text-slate-400" />
+                )}
+              </span>
+            </button>
 
-          {tagError && (
-            <div className="p-5 rounded-3xl bg-rose-50 border border-rose-100 text-[11px] font-bold text-rose-600 leading-relaxed text-left">
-              {tagError}
-            </div>
-          )}
+            {!showAdvanced && (
+              <p className="px-1 text-[9px] font-bold text-slate-400 leading-relaxed text-left truncate">
+                {chosenSummary ||
+                  (materialFirst
+                    ? '已填素材：情节以底本为准，标签只改文风 / 人称。'
+                    : '全部留空也行：没选的维度会由系统每次随机补全。')}
+              </p>
+            )}
 
-          {!tagError &&
-            DIMENSIONS.map((dim) => {
+            {showAdvanced && (
+              <div className="space-y-5 pt-2">
+                {loadingTags && (
+                  <div className="flex items-center gap-3 text-[11px] font-bold text-slate-400">
+                    <Loader2 size={14} className="animate-spin" /> 正在装载 48 个标签…
+                  </div>
+                )}
+
+                {tagError && (
+                  <div className="p-5 rounded-3xl bg-rose-50 border border-rose-100 text-[11px] font-bold text-rose-600 leading-relaxed text-left">
+                    {tagError}
+                  </div>
+                )}
+
+                {!tagError &&
+                  DIMENSIONS.map((dim) => {
               const rowTags = tagsByDim[dim.key] || []
               const picked = selection[dim.key] || []
               return (
@@ -1211,7 +1536,10 @@ export function StoryComposer({
                   </div>
                 </div>
               )
-            })}
+                  })}
+              </div>
+            )}
+          </div>
 
           {/* 构思 —— 这一栏比任何标签都重要 */}
           <div className="space-y-2.5 pt-4 border-t border-slate-100">
@@ -1229,20 +1557,95 @@ export function StoryComposer({
           </div>
 
           {/* 参考素材 —— 有素材就是「改编底本」：以它为主线情节，AI 只补细节与衔接 */}
-          <div className="space-y-2.5">
-            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left block">
-              参考素材 · 改编底本
-              <span className="ml-2 font-bold tracking-normal normal-case text-slate-300">可留空</span>
-            </label>
-            <textarea
-              value={materials}
-              onChange={(e) => setMaterials(e.target.value)}
-              rows={3}
-              placeholder="粘贴你的原始故事或梗概：生成时会以它为主线情节来改编，AI 只补细节、场景衔接和缺失的铺垫。"
-              className="w-full p-5 bg-slate-50 rounded-3xl border border-slate-100 outline-none text-[13px] font-medium leading-relaxed resize-none focus:border-indigo-200 focus:bg-white transition-all"
-            />
+          <div className="space-y-3">
+            <div className="flex items-end justify-between gap-3">
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left block">
+                参考素材 · 改编底本
+                <span className="ml-2 font-bold tracking-normal normal-case text-slate-300">
+                  可留空 · 一篇对应一篇 · 填了即「素材优先」
+                </span>
+              </label>
+              <button
+                type="button"
+                onClick={addMaterial}
+                disabled={materialInputs.length >= MAX_BATCH_STORIES}
+                title={
+                  materialInputs.length >= MAX_BATCH_STORIES
+                    ? `一次批量最多 ${MAX_BATCH_STORIES} 篇`
+                    : '再加一篇素材（自动把批量篇数加到对应数量）'
+                }
+                className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-indigo-50 border border-indigo-100 text-[9px] font-black uppercase tracking-widest text-indigo-600 hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                <Plus size={12} /> 添加素材
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {materialInputs.map((item, index) => {
+                const active = index < batchCount
+                return (
+                  <div
+                    key={index}
+                    className={`rounded-3xl border p-3.5 transition-colors ${
+                      active ? 'bg-slate-50 border-slate-100' : 'bg-white border-dashed border-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-3 px-1 mb-2">
+                      <span className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-400">
+                        素材 {index + 1}
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[8px] font-black tracking-normal normal-case ${
+                            active ? 'bg-indigo-50 text-indigo-500' : 'bg-slate-100 text-slate-300'
+                          }`}
+                        >
+                          {active ? `→ 第 ${index + 1} 篇` : `第 ${index + 1} 篇未启用`}
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => removeMaterial(index)}
+                        title={materialInputs.length <= 1 ? '清空这一篇素材' : `删除素材 ${index + 1}`}
+                        aria-label={materialInputs.length <= 1 ? '清空素材' : `删除素材 ${index + 1}`}
+                        className="p-1.5 rounded-xl text-slate-300 hover:text-rose-500 hover:bg-rose-50 transition-all"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                    <textarea
+                      value={item}
+                      onChange={(e) => updateMaterial(index, e.target.value)}
+                      rows={3}
+                      placeholder={
+                        index === 0
+                          ? '粘贴原始故事或梗概：生成时会以它为主线情节来改编，AI 只补细节、场景衔接和缺失的铺垫。'
+                          : `粘贴第 ${index + 1} 篇的原始故事或梗概……`
+                      }
+                      className="w-full p-5 bg-white rounded-3xl border border-slate-100 outline-none text-[13px] font-medium leading-relaxed resize-none focus:border-indigo-200 transition-all"
+                    />
+                  </div>
+                )
+              })}
+            </div>
+
+            {hasAnyMaterial && (
+              <div className="p-4 rounded-3xl bg-indigo-50/70 border border-indigo-100 text-left">
+                <p className="text-[9px] font-black uppercase tracking-widest text-indigo-500">
+                  素材优先模式{materialFirst ? ' · 已启用' : ' · 部分篇目启用'}
+                </p>
+                <p className="mt-1.5 text-[10px] font-bold text-indigo-700/80 leading-relaxed">
+                  填了素材的篇目，情节、人物关系、关键事件和结局都以底本为准，AI 只补细节、场景衔接和缺失的铺垫。
+                  这些篇目固定写 {MATERIAL_FIRST_LENGTH} 字；标签与写法只改文风、人称和腔调，不会随机补全，也不会把故事带离底本。
+                </p>
+              </div>
+            )}
+
             <p className="text-[9px] font-bold text-slate-300 leading-relaxed text-left px-1">
-              填了就以它为主线情节 —— 人物关系、关键事件、结局方向都照它来，不会再天马行空另写一个故事；留空则按上面的构思自由创作。
+              多篇素材按顺序用于批量生成：素材 1 → 第 1 篇，素材 2 → 第 2 篇……；没有素材的篇目按上面的构思自由创作。
+              {batchCount < materialInputs.length && (
+                <span className="block text-amber-500 mt-1">
+                  当前只生成 {batchCount} 篇，第 {batchCount + 1} 篇起的素材暂不参与本次批量。
+                </span>
+              )}
             </p>
           </div>
 
@@ -1255,18 +1658,27 @@ export function StoryComposer({
                   key={p.value}
                   type="button"
                   onClick={() => onComboChange({ ...selection, length: p.value })}
+                  disabled={materialFirst}
+                  title={materialFirst ? '素材优先：固定 2500 字，避免把底本后半段压成总结' : undefined}
                   className={`py-3 rounded-2xl text-[10px] font-black border transition-all ${
-                    length === p.value
+                    effectiveLength === p.value
                       ? 'bg-slate-900 text-white border-slate-900'
                       : 'bg-white text-slate-400 border-slate-100 hover:border-slate-300'
-                  }`}
+                  } ${materialFirst && effectiveLength !== p.value ? 'opacity-40' : ''} disabled:cursor-not-allowed`}
                 >
                   {p.label}
+                  {materialFirst && p.value === MATERIAL_FIRST_LENGTH && (
+                    <span className="ml-1 text-[8px] tracking-normal">· 素材优先</span>
+                  )}
                 </button>
               ))}
             </div>
             <p className="text-[9px] text-slate-300 leading-relaxed text-left px-1">
-              1500 字大约要 20–40 秒。模型偶尔会偷工写短，用底部「接着写下去」补足就行。
+              {materialFirst
+                ? `${MATERIAL_FIRST_LENGTH} 字是素材优先的固定篇幅：底本后半段（转折、收束）才不会因为篇幅不够被压成一句总结。`
+                : hasAnyMaterial
+                  ? `有素材的篇目固定 ${MATERIAL_FIRST_LENGTH} 字；没有素材的篇目按这里选的篇幅自由创作。`
+                  : '1500 字大约要 20–40 秒。模型偶尔会偷工写短，用底部「接着写下去」补足就行。'}
             </p>
           </div>
 
@@ -1656,6 +2068,61 @@ export function StoryComposer({
             </div>
           )}
 
+          {batchResults.length > 0 && (
+            <div className="space-y-2 p-5 rounded-3xl bg-indigo-50/60 border border-indigo-100">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-black uppercase tracking-widest text-indigo-400 text-left block">
+                  批量结果
+                </label>
+                <span className="text-[9px] font-black text-indigo-400">
+                  成功 {batchOkCount} 篇
+                  {batchErrorCount ? ` · 中断 ${batchErrorCount} 篇` : ''}
+                  {batchSkipped ? ` · 未生成 ${batchSkipped} 篇` : ''}
+                </span>
+              </div>
+              {batchResults.map((item) => (
+                <div
+                  key={`${item.index}-${item.title || 'error'}`}
+                  className="flex items-start gap-3 rounded-2xl bg-white border border-indigo-100/70 px-3.5 py-2.5"
+                >
+                  <span
+                    className={`mt-0.5 w-5 h-5 rounded-lg text-[9px] font-black flex items-center justify-center shrink-0 ${
+                      item.error ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-600'
+                    }`}
+                  >
+                    {item.index}
+                  </span>
+                  <div className="flex-1 min-w-0 text-left">
+                    <p className="text-[11px] font-black text-slate-700 truncate">
+                      {item.title || `第 ${item.index} 篇（未写完）`}
+                    </p>
+                    {item.error ? (
+                      <p className="text-[9px] font-bold text-rose-500 leading-relaxed mt-0.5">{item.error}</p>
+                    ) : (
+                      <p className="text-[9px] font-bold text-slate-400 mt-0.5">
+                        已存为草稿
+                        {item.warnings.length > 0 && (
+                          <span className="ml-2 text-amber-600" title={item.warnings.join('\n')}>
+                            {item.warnings.length} 条提醒
+                          </span>
+                        )}
+                      </p>
+                    )}
+                  </div>
+                  {!item.error && item.draftId && (
+                    <Link
+                      href={`/admin/trends/edit?id=${encodeURIComponent(item.draftId)}`}
+                      onClick={onClose}
+                      className="shrink-0 text-[9px] font-black text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1.5 rounded-lg transition-all"
+                    >
+                      打开
+                    </Link>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
           {error && (
             <div className="p-5 rounded-3xl bg-rose-50 border border-rose-100 text-[11px] font-bold text-rose-600 leading-relaxed text-left">
               {error}
@@ -1665,7 +2132,7 @@ export function StoryComposer({
 
         {/* 底部动作条 */}
         <footer className="border-t border-slate-100 px-8 py-6 space-y-3 shrink-0 bg-white">
-          {(chosenSummary || activeSkill) && (
+          {(chosenSummary || activeSkill || materialFirst) && (
             <p className="text-[10px] font-bold text-slate-400 text-left">
               {activeSkill && (
                 <span className="text-indigo-500 mr-2">
@@ -1673,9 +2140,51 @@ export function StoryComposer({
                 </span>
               )}
               {chosenSummary && `已选：${chosenSummary} · `}
-              {length} 字
+              {effectiveLength} 字
+              {materialFirst && <span className="text-indigo-500"> · 素材优先</span>}
             </p>
           )}
+          {/* 批量：一次写 1–5 篇，直接落库成草稿。手机上藏起来，避免底部动作条挤爆。 */}
+          <div className="hidden sm:flex items-center gap-2 pb-1">
+            <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 shrink-0">
+              批量创作
+            </span>
+            <div className="flex items-center gap-1 rounded-2xl bg-slate-50 border border-slate-100 p-1">
+              {Array.from({ length: MAX_BATCH_STORIES }, (_, i) => i + 1).map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setBatchCount(n)}
+                  disabled={busy !== 'idle'}
+                  title={n === 1 ? '只写一篇，直接存草稿' : `一次写 ${n} 篇，每篇自动换 Seed 并避开前几篇的人名/地点`}
+                  className={`w-8 h-7 rounded-xl text-[10px] font-black transition-all ${
+                    batchCount === n
+                      ? 'bg-indigo-600 text-white shadow'
+                      : 'text-slate-400 hover:text-slate-700 hover:bg-white'
+                  } disabled:opacity-50`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={handleBatchGenerate}
+              disabled={busy !== 'idle'}
+              className="flex-1 h-9 rounded-2xl bg-indigo-50 border border-indigo-100 text-indigo-700 font-black text-[10px] uppercase tracking-widest hover:bg-indigo-100 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+            >
+              {busy === 'batch' ? (
+                <>
+                  <Loader2 size={13} className="animate-spin" /> 批量创作中… {elapsed}s
+                </>
+              ) : (
+                <>
+                  <Layers size={13} /> {batchCount === 1 ? '生成并存成草稿' : `生成 ${batchCount} 篇草稿`}
+                </>
+              )}
+            </button>
+          </div>
+
           <div className="flex gap-3">
             <button
               type="button"

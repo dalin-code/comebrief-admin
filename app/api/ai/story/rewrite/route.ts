@@ -4,6 +4,7 @@ import { callText } from '@/lib/aiProvider'
 import { countChineseChars, parseDelimitedStory, toStoryHtml } from '@/lib/storyPrompt'
 import { getSupabaseAdminClient } from '@/lib/supabaseAdmin'
 import { loadSkill } from '@/lib/storySkills'
+import { isMaterialFirst } from '@/lib/storySelection'
 import { REVIEW_DIMENSIONS, type ReviewDimensionKey, type ReviewIssue } from '@/lib/storyReview'
 import { buildRewriteSystemPrompt, buildRewriteUserPrompt, detectPlotLevelRequest } from '@/lib/storyRewrite'
 
@@ -84,7 +85,12 @@ export async function POST(req: NextRequest) {
     const admin = getSupabaseAdminClient()
     if (!admin.ok) return jsonResponse({ error: admin.error }, 500)
 
-    const chosen = await loadSkill(admin.client, body?.skill)
+    // 素材优先且没选写法时，不回落默认写法：默认腔调会覆盖底本的叙述方式。
+    // 前端会把预览实际用的写法传回来（随机抽到的、或站长手选的），这里只补「真的没有」的情况。
+    const chosen: Awaited<ReturnType<typeof loadSkill>> =
+      isMaterialFirst(materials) && !String(body?.skill || '').trim()
+        ? { row: null }
+        : await loadSkill(admin.client, body?.skill)
 
     const ai = await callText({
       task: 'revise',

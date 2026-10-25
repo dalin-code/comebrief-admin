@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server'
 import { getSupabaseWriteClient } from '@/lib/supabaseAdmin'
 import { getBearer, jsonResponse, requireAdmin } from '@/lib/aiGemini'
+import { notifyFrontendRevalidate } from '@/lib/revalidateFrontend'
 
 export const runtime = 'nodejs'
 
@@ -129,6 +130,11 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  console.log('[categories:reorder] ok', { count: applied.length, userId: auth.userId, via: write.via })
-  return jsonResponse({ ok: true, order: applied, via: write.via })
+  // 顺序落库成功 = 前台那排页签该换位置了。顺手敲一下前台的门让它立刻重建
+  // （没配 FRONTEND_REVALIDATE_URL / REVALIDATE_SECRET 时这行什么都不做，
+  //  前台最多一分钟后自己刷新 —— 见 lib/revalidateFrontend.ts）。
+  const frontend = await notifyFrontendRevalidate('categories:reorder')
+
+  console.log('[categories:reorder] ok', { count: applied.length, userId: auth.userId, via: write.via, frontend })
+  return jsonResponse({ ok: true, order: applied, via: write.via, frontend })
 }

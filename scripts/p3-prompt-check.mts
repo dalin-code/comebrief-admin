@@ -16,6 +16,8 @@
  */
 import { buildContinueUserPrompt, buildStoryUserPrompt, type StoryTag } from '../lib/storyPrompt.ts'
 import { buildRewriteSystemPrompt, buildRewriteUserPrompt, detectPlotLevelRequest } from '../lib/storyRewrite.ts'
+import { MATERIAL_FIRST_LENGTH } from '../lib/storySelection.ts'
+import { buildSkeletonUserPrompt } from '../lib/storyPlan.ts'
 
 let failed = 0
 const check = (name: string, cond: boolean, extra = '') => {
@@ -46,13 +48,33 @@ const IDEA = '背景放欧美，人物名字换成英文音译。'
 const ADAPT_HEADER = '【改编底本（这是这一篇的情节主干，必须照它写）】'
 
 /* 1. 生成那遍：有素材 = 有情节主干 */
-const generated = buildStoryUserPrompt({ combo: {}, tagsByDimension, idea: IDEA, materials: MATERIAL, length: 1500 })
+const generated = buildStoryUserPrompt({
+  combo: {},
+  tagsByDimension,
+  idea: IDEA,
+  materials: MATERIAL,
+  length: MATERIAL_FIRST_LENGTH,
+})
 check('1a 素材被标成「改编底本」', generated.includes(ADAPT_HEADER))
 check('1b 素材原文整段进了提示词', generated.includes(MATERIAL))
-check('1c 有「冲突时的优先级」收口', generated.includes('【冲突时的优先级】站长的构思 > 改编底本的情节主干'))
+check(
+  '1c 有「冲突时的优先级」收口，标签/写法被压到表层',
+  generated.includes(
+    '【冲突时的优先级】站长的构思 > 改编底本的情节主干 > 标签 / 写法（只影响表层）'
+  )
+)
 check('1d 构思那节写明优先于改编底本', generated.includes('【本篇构思（站长的总体要求，优先于改编底本）】'))
 check('1e 写明只补细节、不许另起一个故事', generated.includes('不许另起一个故事'))
 check('1f 仍要求换句不换事（不要整段照抄）', generated.includes('不要整段照抄'))
+check(
+  '1h 素材优先：标签被明确降级为表层',
+  generated.includes('【本次的标签设定（只影响文风 / 人称 / 节奏等表层，不得改变下面的改编底本）】')
+)
+check(
+  '1i 素材优先：篇幅固定 2500 并要求写完整',
+  generated.includes(`【篇幅】${MATERIAL_FIRST_LENGTH} 字左右`)
+    && generated.includes('素材优先：必须写满，把底本的因果与结局完整走完')
+)
 
 const materialAt = generated.indexOf(ADAPT_HEADER)
 const priorityAt = generated.indexOf('【冲突时的优先级】')
@@ -73,7 +95,13 @@ const bareNoIdea = buildStoryUserPrompt({ combo: {}, tagsByDimension, idea: '', 
 check('2c 构思与素材都空 → 仍是原来的自由创作兜底', bareNoIdea.includes('请围绕上面选定的题材自行设计一个具体、可信、有画面的故事'))
 
 /* 3. 构思为空 + 有素材时，兜底文案也得跟着改（否则等于叫模型自己另编一个） */
-const noIdea = buildStoryUserPrompt({ combo: {}, tagsByDimension, idea: '', materials: MATERIAL, length: 1500 })
+const noIdea = buildStoryUserPrompt({
+  combo: {},
+  tagsByDimension,
+  idea: '',
+  materials: MATERIAL,
+  length: MATERIAL_FIRST_LENGTH,
+})
 check('3a 有素材但没构思 → 兜底是「围绕下面的改编底本写」', noIdea.includes('围绕下面的改编底本写'))
 check('3b 此时不该出现「自行设计一个」', !noIdea.includes('自行设计一个'))
 
@@ -83,7 +111,7 @@ const withTitles = buildStoryUserPrompt({
   tagsByDimension,
   idea: IDEA,
   materials: MATERIAL,
-  length: 1500,
+  length: MATERIAL_FIRST_LENGTH,
   avoidTitles: ['雨夜的电话', '旧照片'],
 })
 check('4a 有素材时，往期标题那节加了豁免说明', withTitles.includes('有改编底本时，这一条只在素材没写到的部分生效'))
@@ -168,6 +196,35 @@ for (const [notes, want] of plotCases) {
   const got = detectPlotLevelRequest(notes)
   check(`7 ${want ? '情节级' : '句子级'} ←「${notes}」`, got === want, got === want ? '' : `期望 ${want}，实得 ${got}`)
 }
+
+/* 8. 骨架那遍：底本先拆节拍，标签/构思只决定怎么讲；篇幅固定 2500 */
+const skeleton = buildSkeletonUserPrompt({
+  tagsByDimension,
+  idea: IDEA,
+  materials: MATERIAL,
+  length: MATERIAL_FIRST_LENGTH,
+  seed: 'story-2026',
+})
+const materialAt2 = skeleton.indexOf('【改编底本（这是这一篇的情节主干，必须照它拆节拍）】')
+const tagsAt2 = skeleton.indexOf('【本次的标签设定（只影响文风 / 人称 / 节奏等表层，不得改变上面的改编底本）】')
+check('8a 骨架提示词以改编底本开头', materialAt2 === 0, `materialAt=${materialAt2}`)
+check('8b 标签节排在底本之后（底本优先拆节拍）', materialAt2 >= 0 && tagsAt2 > materialAt2)
+check('8c 骨架提示词要求按底本的事件/因果/结局拆节拍', skeleton.includes('把它的核心冲突、人物关系、关键事件、因果、反转与结局方向拆成 4–6 个节拍'))
+check(
+  '8d 骨架的篇幅也是素材优先 2500（写满、把结局走完）',
+  skeleton.includes(`【篇幅】目标 ${MATERIAL_FIRST_LENGTH} 字（素材优先：写满，把底本的因果与结局完整走完）`)
+)
+
+const skeletonBare = buildSkeletonUserPrompt({
+  tagsByDimension,
+  idea: IDEA,
+  materials: '',
+  length: 1500,
+  seed: 'story-2026',
+})
+check('8e 没素材时骨架提示词仍是旧的标签 → 构思顺序', !skeletonBare.includes('改编底本')
+  && skeletonBare.indexOf('【本次的标签设定】') < skeletonBare.indexOf('【站长的构思】'))
+check('8f 没素材时骨架篇幅不带「素材优先」', skeletonBare.includes('【篇幅】目标 1500 字，按 4–6 段分配'))
 
 console.log(failed ? `\n✗ ${failed} 项不通过` : '\n✓ 全部通过')
 process.exit(failed ? 1 : 0)
