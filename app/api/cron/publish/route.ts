@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server'
 import { getSupabaseAdminClient } from '@/lib/supabaseAdmin'
+import { SITE_URL, pushPublishedRows, pushUrls, type PushResult } from '@/lib/indexPush'
 
 /**
  * 定时发布引擎（P0）
@@ -166,6 +167,44 @@ async function run(req: NextRequest, dry: boolean) {
     console.log('[cron-publish]', JSON.stringify({ startedAt, dry, updated, errors }))
   }
 
+  /**
+   * IndexNow 旁路：把刚变成「已发布」的条目报给 Bing 系搜索引擎。
+   *
+   * 放在发布成功之后、返回之前，并且**整段 try/catch**：推送失败绝不能影响
+   * 定时发布本身的结论。dry 模式不推（否则每天演练都在骚扰引擎）。
+   *
+   * 同时也推三个列表页：新内容会出现在列表顶部，页面本身确实变了。
+   */
+  let indexnow: PushResult | null = null
+  if (!dry && total > 0) {
+    try {
+      const perTable = await Promise.all(
+        results
+          .filter((r) => r.ok && (r.published?.length || 0) > 0)
+          .map((r) => pushPublishedRows(admin.client, r.table, r.published || []))
+      )
+
+      const listings = await pushUrls(
+        ['/briefs', '/stories', '/quizzes'].map((path) => `${SITE_URL}${path}`)
+      )
+
+      indexnow = [...perTable, listings].reduce<PushResult>(
+        (acc, p) => ({
+          ok: acc.ok && p.ok,
+          submitted: acc.submitted + p.submitted,
+          batches: acc.batches + p.batches,
+          status: p.status ?? acc.status,
+          error: p.error ?? acc.error,
+        }),
+        { ok: true, submitted: 0, batches: 0 }
+      )
+
+      console.log('[cron-publish] indexnow', JSON.stringify(indexnow))
+    } catch (e: any) {
+      console.error('[cron-publish] indexnow threw:', e?.message || e)
+    }
+  }
+
   return Response.json({
     ok: errors.length === 0,
     dry,
@@ -174,6 +213,7 @@ async function run(req: NextRequest, dry: boolean) {
     updated,
     results,
     errors,
+    indexnow,
   })
 }
 
