@@ -59,6 +59,27 @@ export async function GET(req: NextRequest) {
     DEEPSEEK_API_KEY: Boolean(process.env.DEEPSEEK_API_KEY),
     ZHIPU_API_KEY: Boolean(process.env.ZHIPU_API_KEY),
     MOONSHOT_API_KEY: Boolean(process.env.MOONSHOT_API_KEY),
+    /**
+     * Groq（OpenAI 兼容层）。它的模型写法必须带 `groq:` 前缀 ——
+     * Groq 的模型 ID 有的自带斜杠（`openai/gpt-oss-120b`），不写前缀会被判成 OpenRouter，
+     * 于是「Key 明明配了、自检也显示 ✓，调用却报 OpenRouter 缺 Key」。这一行就是给那种情况留的证据。
+     */
+    GROQ_API_KEY: Boolean(process.env.GROQ_API_KEY),
+    /**
+     * 硅基流动（国际站 api.siliconflow.com，OpenAI 兼容层）。
+     * ⚠️ 模型写法必须带 `siliconflow:` 前缀：它的模型 ID 全是 `组织/模型`
+     * （`deepseek-ai/DeepSeek-V3.2`），不写前缀会被 inferProvider 判成 OpenRouter。
+     * ⚠️ 这里显示 ✓ 只代表「Key 在」—— 余额为 0 时每次生成都是 402 / code 30001，
+     *    那种情况要点「真调一次」才会露出来（自检的问句只有两个字，测不出余额）。
+     */
+    SILICONFLOW_API_KEY: Boolean(process.env.SILICONFLOW_API_KEY),
+    /**
+     * AI 封面的 Cloudflare Workers AI 凭据。
+     * 它们和上面几张 LLM Key 一样是「服务端环境变量」，线上缺了只会在点「AI 生成」时
+     * 报一句 Missing env —— 放进这张表，自检卡片就能当场看见是哪一项没配上。
+     */
+    CLOUDFLARE_ACCOUNT_ID: Boolean(process.env.CLOUDFLARE_ACCOUNT_ID || process.env.NEXT_PUBLIC_CLOUDFLARE_ACCOUNT_ID),
+    CLOUDFLARE_API_TOKEN: Boolean(process.env.CLOUDFLARE_API_TOKEN || process.env.NEXT_PUBLIC_CLOUDFLARE_API_TOKEN),
   }
   /**
    * 翻译兜底的凭据。
@@ -191,11 +212,26 @@ function summarize(input: {
     const dead = input.probeResults.filter((r) => r.ok === false)
     if (!dead.length) return { level: 'ok' as const, text: `全部可用（探测了 ${input.probeResults.length} 个模型）` }
     const all = dead.length === input.probeResults.length
+    // 把原因统计出来再说话：四个候选各有各的死法时，只报 dead[0] 的那句会把人带偏
+    const tally = (() => {
+      const m = new Map<string, number>()
+      for (const r of dead) m.set(String(r.kind), (m.get(String(r.kind)) || 0) + 1)
+      return [...m].map(([k, n]) => `${k}×${n}`).join('、')
+    })()
+    /**
+     * 402 = 账户没钱：换模型、等一会儿全都无效，**只有充值**能解。
+     * 这比「免费额度用完了」更该先说出来 —— 2026-10-26 那次四个候选里有两个是 402，
+     * 屏幕上却只写「还在冷却（剩 4 秒）」。
+     */
+    const broke = dead.filter((r) => r.status === 402).map((r) => String(r.spec))
+    const advice = broke.length
+      ? `其中 ${broke.join('、')} 是余额不足（HTTP 402），必须充值才有额度`
+      : String(dead[0]?.error || '')
     return {
       level: all ? ('error' as const) : ('warn' as const),
-      text: all
-        ? `试过的 ${dead.length} 个模型都不能用：${dead[0]?.error || ''}`
-        : `${dead.length} / ${input.probeResults.length} 个模型不可用：${dead[0]?.error || ''}`,
+      text: `${
+        all ? `试过的 ${dead.length} 个模型都不能用` : `${dead.length} / ${input.probeResults.length} 个模型不可用`
+      }（${tally}）：${advice}`,
     }
   }
   const cooling = input.cooldowns.filter((c) => c.leftMs > 0)

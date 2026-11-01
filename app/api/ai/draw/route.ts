@@ -350,9 +350,18 @@ export async function POST(req: NextRequest) {
         hasToken: Boolean(cfToken),
         nodeEnv: process.env.NODE_ENV || '',
       })
+      /**
+       * 线上（Vercel）只认项目里的环境变量：`.env.local` 在 .gitignore 里，
+       * 不会随代码上传，patchCloudflareEnvFromFiles 只在自托管、仓库根真有这些文件时才生效。
+       * 所以这句提示必须把「去哪儿配 + 配完要重新部署」一起说清楚，
+       * 否则站长看到的只有一句缺变量，不知道该动哪里。
+       */
+      const missingHint =
+        '线上要把 CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN 配到 Vercel 项目环境变量（Production + Preview）并重新部署；.env.local 不上传，线上读不到它'
       return new Response(
         JSON.stringify({
-          error: 'Missing env: CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN',
+          error: `Missing env: CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN —— ${missingHint}`,
+          hint: missingHint,
           env: {
             hasAccountId: Boolean(cfAccountId),
             hasToken: Boolean(cfToken),

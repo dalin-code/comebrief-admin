@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import QuizBatchImport from "@/app/admin/_components/QuizBatchImport";
 // --- 🚀 AURA 核心：WebP 转码转码引擎 ---
 const compressAndConvertToWebP = (file: File): Promise<File> => {
   return new Promise((resolve, reject) => {
@@ -54,9 +55,7 @@ function QuizEditorContent() {
   const [scheduledAt, setScheduledAt] = useState("");
   const [isFeatured, setIsFeatured] = useState(false);
   const [featuredOrder, setFeaturedOrder] = useState(0);
-  const [isImporting, setIsImporting] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false); 
-  const [importJsonText, setImportJsonText] = useState(""); 
   const [toast, setToast] = useState<{ msg: string, type: 'success' | 'error' } | null>(null);
 
   // 分类管理状态 (之前丢失的部分)
@@ -247,31 +246,6 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       showToast(err.message, "error");
     } finally {
       setIsSaving(false);
-    }
-  };
-
-  const handleTextImport = async () => {
-    if (!importJsonText.trim()) return;
-    setIsImporting(true);
-    try {
-      const data = JSON.parse(importJsonText);
-      const items = Array.isArray(data) ? data : [data];
-      const insertPayload = items.map(q => ({
-        title: q.title,
-        raw_data: q,
-        active: false,
-        categories: q.categories || ["Persona"]
-      }));
-      const { error } = await supabase.from('quizzes').insert(insertPayload);
-      if (error) throw error;
-      showToast(`Imported ${items.length} Quizzes`, "success");
-      setShowImportModal(false);
-      setImportJsonText("");
-      setTimeout(() => router.push('/admin/quizzes'), 1000);
-    } catch {
-      showToast("Invalid JSON Format", "error");
-    } finally {
-      setIsImporting(false);
     }
   };
 
@@ -538,26 +512,17 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         </aside>
       </main>
 
-      {/* 批量导入弹窗 (恢复) */}
-      {showImportModal && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-          <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-3xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
-            <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-              <h3 className="text-sm font-black uppercase tracking-widest text-slate-900">Batch JSON Import</h3>
-              <button onClick={() => setShowImportModal(false)} className="text-slate-400 hover:text-slate-900 bg-white p-2 rounded-xl"><X size={20}/></button>
-            </div>
-            <div className="p-6 bg-slate-100">
-              <textarea className="w-full h-96 bg-slate-900 text-emerald-400 p-6 rounded-2xl font-mono text-[11px] outline-none resize-none leading-relaxed" value={importJsonText} onChange={(e) => setImportJsonText(e.target.value)} placeholder="Paste AI-generated JSON pack..." />
-            </div>
-            <div className="p-6 border-t flex justify-end gap-3 bg-white">
-              <button onClick={() => setShowImportModal(false)} className="px-6 py-3 text-[10px] font-black uppercase text-slate-500 rounded-xl">Cancel</button>
-              <button onClick={handleTextImport} disabled={isImporting || !importJsonText.trim()} className="bg-blue-600 text-white px-8 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-xl active:scale-95 transition-all">
-                {isImporting ? "Processing..." : "Confirm Batch Import"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 批量草稿导入：多框 + 提交前校验（逻辑在 lib/quizPack.ts） */}
+      <QuizBatchImport
+        open={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        onError={(msg) => showToast(msg, "error")}
+        onImported={(count) => {
+          showToast(`已创建 ${count} 篇草稿`, "success");
+          setShowImportModal(false);
+          setTimeout(() => router.push('/admin/quizzes'), 1000);
+        }}
+      />
     </div>
   );
 }

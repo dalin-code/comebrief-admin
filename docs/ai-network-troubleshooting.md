@@ -281,6 +281,151 @@ AI_MODEL_FALLBACK=gemini-3.6-flash, gemini-3.7-flash
 - **慢失败拖住每一次点击**：主模型不健康时，每次调用都要先陪它耗完超时才轮到兜底。现在 5xx / 超时 / 网络断也会进 **45 秒冷却**，冷却期内直接走兜底。
 - **重试时机**：旧代码限流后固定等 1.2 秒重试（对面说的是 20 秒 —— 白送一次失败）。现在听对面的 `retryDelay`，上限 10 秒。
 
+## 附录：四个候选全挂，屏幕上却只写「还在冷却（剩 4 秒）」（2026-10-26 后台）
+
+### 症状
+
+点「AI 生成」一律失败，红字只有一句：
+
+> `gemini-3.5-flash 都刚失败过，还在冷却：最快 4 秒后可以再点`
+
+等 4 秒再点，还是同一句。终端里也只有一句聚合后的 error —— **到底谁挂了、为什么挂，一个字都看不到**。
+
+### 实测（同一天逐个直连，不是猜的）
+
+| 供应商 | 模型 | 真实回包 |
+| --- | --- | --- |
+| Gemini 直连 | `gemini-3.5-flash` / `gemini-3.6-flash` | **429**，`quotaId=GenerateRequestsPerDayPerProjectPerModel-FreeTier` → 当日额度，约 4.5 小时后重置 |
+| Gemini 直连 | `gemini-3.7-flash` | **20 秒超时**（慢失败） |
+| Gemini 直连 | `gemini-3.8-flash` | **503** |
+| Groq | `openai/gpt-oss-20b` | **能过**，但响应头 `x-ratelimit-limit-tokens: 8000`（免费档 TPM）；长文提示词 + `max_tokens: 8192` → **413**，`code: rate_limit_exceeded` |
+| OpenRouter | `deepseek/deepseek-chat` | **402**，`total_credits: 0`（"can only afford 3914 tokens"，我们要 8192） |
+| 硅基流动 | `deepseek-ai/DeepSeek-V3.2` | **402 / `code: 30001`** 余额不足（同一把 Key 打 `.cn` 更狠：`30014 Token is invalid`） |
+
+结论：四个候选里**没有一个真的「被限流」** —— 两个余额为 0、一个单次请求超 TPM、一个当日额度用尽。
+
+> **同一天 11:00 复测（别把早上的结论当永久结论）**：`gemini-3.5-flash` / `gemini-3.6-flash`
+> 已经恢复（8192 也过），Groq 短提示词能过、真实长提示词仍 413，OpenRouter 余额只够 ~3386 token
+> （600 能过、8192 回 402），硅基流动仍是 `402 / 30001`。**每日额度是按模型分池的，几小时就会自己回来。**
+
+### 2026-10-26 下午：兜底换成 OpenRouter 免费档（怎么挑、怎么读 429）
+
+站长要求把 `AI_MODEL_FALLBACK` 换成「OpenRouter 上最新的免费长文本模型」。这类活儿**先查目录再改配置** ——
+一个拼错或已下线的 ID，线上表现就是 404「模型名不存在」，看上去跟「服务挂了」没什么区别。
+
+```bash
+# ① 查目录（公开接口，不用 Key）：还有谁带 :free、上下文多长（2026-10-26 共 464 个模型）
+curl -s https://openrouter.ai/api/v1/models -o /tmp/m.json && node -e "for(const m of require('/tmp/m.json').data.filter(x=>x.id.endsWith(':free')))console.log(m.context_length+'\t'+m.id)"
+
+# ② 查这把 Key 的余额/档位（is_free_tier=true 就是免费档，429 会按上游池算）
+curl -s https://openrouter.ai/api/v1/key -H "Authorization: Bearer $OPENROUTER_API_KEY"
+```
+
+逐个真调（`:free` pricing=0，不扣余额；1024 = 摘要/杂活形状，8192 = `/api/ai/story` 的真实形状）：
+
+| 模型 | 上下文 | 1024 | 8192 | 结论 |
+| --- | --- | --- | --- | --- |
+| `nvidia/nemotron-3-ultra-550b-a55b:free` | 1M | ✅ 2.3s | ✅ 1.8s | 进链，第一顺位兜底 |
+| `nvidia/nemotron-3.5-lightning:free` | 1M | ❌ 空内容 + `finish_reason=length` | ✅ 14.7s | 进链；推理模型，摘要类小额度顶不上 |
+| `nvidia/nemotron-3.5-super-vl:free` | 1M | ✅ 39s | ✅ 2.5s | 进链；小额度慢过 excerpt 的 22s 超时 |
+| `meta-llama/llama-3.3-70b-instruct:free` | — | 目录里**不存在** | — | 不写（llama 系列现在一个 `:free` 都没有） |
+| `xingchen-agi/xing4.0-29b-a4b:free` | 262k | ❌ 429 | ❌ 429 | Phala 上游池被占满 |
+| `recursive/flint-v1.0:free` | 262k | 429（时好时坏） | ✅ 0.98s | 备用 |
+| `google/gemma-4-31b-it:free` | 262k | ❌ 429 | ❌ 429 | 备用 |
+| `thinkingmachines/inkling:free` | 1M | ❌ **403** | — | 账号没权限，别写进链 |
+
+三条免费档专有的规矩：
+
+1. **`:free` 一个字符都不能省** —— 省了就是付费模型，这把 Key 只够 ~3386 token，长文直接 402。
+2. **免费档的 429 不是「你的次数用完了」**：响应里 `metadata.limit_source = upstream_provider_shared_pool`，
+   是**上游供应商的公共池**满了，和账号无关 → 只有换**不同供应商**的模型才有用；都挂了就等十几秒
+   （`rate` 冷却 15 秒，表里的冷却逻辑会自动再试）。
+3. **推理型模型（lightning）给太小的 `max_tokens` 会返回空内容**（`finish_reason=length`）。
+   现在的代码把这种失败标成 `badrequest`「maxOutputTokens 太小、被思考吃光」，不会再伪装成 `server`。
+
+现状配置（改完**必须重启 `npm run dev`**，Next 只在启动时读 `.env.local`）：
+
+```bash
+AI_MODEL_FALLBACK=gemini-3.6-flash, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free, openrouter:nvidia/nemotron-3.5-lightning:free, openrouter:nvidia/nemotron-3.5-super-vl:free
+```
+
+> 免费档只适合「Gemini 当天额度用完」顶一阵，不适合当主力：上游池随时 429。要长期稳还是充值
+> （OpenRouter 满 $10 起解除免费档限制、硅基流动 ¥10 起），或把 `AI_UTIL_MODEL` 单独指向便宜的小模型。
+
+### 三个代码缺陷（这才是「看不出原因」的真凶）
+
+1. **`parseProviderError()` 不认识 402 / 413** → 一律落到 `unknown`。后果有三层：
+   - 不进冷却表（下一次点击照样白打一遍）；
+   - 提示语是原文 `报 402：Sorry, your account balance is insufficient`，把「该充钱」说成「服务异常」；
+   - `KIND_PRIORITY.unknown = 7`，比 `rate` 还「不重要」。
+2. **`composeFailure()` 用 `KIND_PRIORITY` 挑主因，而冷却条目（`cold`）挂在 `kind='rate'`** → 优先级 5，
+   比真实死因的 7 靠前。于是「上一轮留下的冷却提示」把「余额不足 / 超 TPM」全盖住了。
+3. **三个路由只打聚合后的 `error`**：`details` 这种东西根本不存在，终端里复盘不出「谁、为什么、HTTP 几」。
+
+### 改动
+
+- `402 → quota`（冷却 **10 分钟**）、`413 → toolarge`（新 kind，冷却 60 秒）；`markCooldown` 都收。
+- `composeFailure()`：**`cold` 条目永远不担任主因**，主因只在「这一轮真发过请求」的候选里挑；
+  全部都是冷时才退回用它们（并回 429，绝不回 `status: 0`）。
+- `cold` 条目带上「上次是什么原因」，措辞改成
+  `gemini-3.5-flash → 额度/余额不足；本轮没问：冷却中，剩 4 秒` —— 「没问」和「问了挂了」不再混为一谈。
+- `CallTextResult.details: string[]`：一行一个候选；`/api/ai/story`、`/api/ai/translate`、`/api/ai/excerpt`
+  失败时把它打进终端、也放进响应体（提示框只有一行宽，装不下）。
+- 自检 `summarize()`：先按 kind 统计（`quota×2、toolarge×1`），再**单独点名 402**
+  —— 「其中 X 是余额不足（HTTP 402），必须充值才有额度」。
+- 用户侧提示语按状态码分流：402 说「充值」，429 说「换模型 / 等重置」，413 说「调小 maxOutputTokens」。
+
+### 错误对照表（现在的口径）
+
+| HTTP | `kind` | 冷却 | 提示语在说什么 | 该怎么办 |
+| --- | --- | --- | --- | --- |
+| 401 / 403 | `auth` | 不冷却 | Key 被拒 / 没权限 | 改 `.env.local` 的 Key（改完立刻能试，不用等） |
+| 402 | `quota` | 10 分钟 | **余额不足**（OpenRouter credits=0、硅基流动 30001） | **充值**，或换一家有额度的供应商 |
+| 429 + `perDay/daily` 或 `retryDelay > 2min` | `quota` | 60 秒起 | 免费额度用完了 | 换模型（同供应商换模型不一定有用：额度按模型分池） |
+| 429（其余） | `rate` | 15 秒起 | 被限流，约 N 秒后恢复 | 缓一下再点 |
+| 404 | `notfound` | 不冷却 | 模型名不存在 / 这把 Key 用不了它 | 核对模型 ID（带斜杠的别漏 `groq:` / `siliconflow:` 前缀） |
+| 400 / 422 | `badrequest` | 不冷却 | 请求被模型拒绝（附对面原话） | 看终端里的原文 |
+| 413 | `toolarge` | 60 秒 | 单次请求超每分钟 token 上限（Groq 免费档 8000 TPM） | 调小 `maxOutputTokens` 或换模型 |
+| 5xx / 超时 / 断网 | `server` | 45 秒 | 服务暂时不稳定 | 等几秒重试（会自动走兜底） |
+
+### 自助排查（别靠提示框猜，直接打）
+
+```bash
+# ① 硅基流动（只认国际站 .com；.cn 会回 30014 Token is invalid）
+curl -s -w '\n%{http_code}\n' https://api.siliconflow.com/v1/chat/completions \
+  -H "Authorization: Bearer $SILICONFLOW_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"deepseek-ai/DeepSeek-V3.2","messages":[{"role":"user","content":"hi"}],"max_tokens":16}'
+
+# ② OpenRouter 还剩多少钱（0 就是 402 的根源）
+curl -s https://openrouter.ai/api/v1/credits -H "Authorization: Bearer $OPENROUTER_API_KEY"
+
+# ③ Groq 的限流额度（看 x-ratelimit-limit-tokens）
+curl -s -D - -o /dev/null https://api.groq.com/openai/v1/chat/completions \
+  -H "Authorization: Bearer $GROQ_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"openai/gpt-oss-20b","messages":[{"role":"user","content":"hi"}],"max_tokens":16}'
+```
+
+后台「AI 自检」→ **「真调一次」** 会无视冷却表（`ignoreCooldown: true`），
+刚充完值立刻想验证就走它；它探测时 `maxOutputTokens` 只有 32，**测不出余额和 TPM 上限** ——
+这两类问题只有真的写一篇才会露出来，所以失败时务必看终端里那几行「候选逐条」。
+
+**复验脚本**：[`scripts/p12-ai-candidates-probe.mts`](../scripts/p12-ai-candidates-probe.mts) —— 一条命令看全「谁挂了、为什么挂」：
+
+```bash
+cd Sass
+# A 离线分类断言 + B 配置解析（前缀对不对）+ C 逐个真调（花少量额度）
+node --import ./scripts/_ts-resolve.mts scripts/p12-ai-candidates-probe.mts
+
+# 额度紧张时只看 A/B，一次网络都不发
+P12_OFFLINE=1 node --import ./scripts/_ts-resolve.mts scripts/p12-ai-candidates-probe.mts
+
+# 按「写正文」的真实形状测（story 路由就是 maxOutputTokens 8192）—— 413 / 402 只有这个尺寸才现原形
+P12_MAX=8192 node --import ./scripts/_ts-resolve.mts scripts/p12-ai-candidates-probe.mts
+```
+
+脚本 B 段会顺带钉住一个容易错的点：`deepseek-ai/DeepSeek-V3.2` 这种**裸写**会被判成 OpenRouter，
+硅基流动必须写 `siliconflow:deepseek-ai/DeepSeek-V3.2`。
+
 ## 相关：翻译的第二层兜底（2026-10-13）
 
 这篇讲的全是 **LLM 那半边**：模型 429 / 503 / 网络断、冷却、跨供应商的兜底模型链。

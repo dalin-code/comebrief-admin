@@ -75,12 +75,22 @@ VERCEL_TOKEN=xxx GH_TOKEN=xxx node scripts/set-deploy-env.mts
 
 1. 按域名 `admin.comebrief.com` 在 Vercel 里**自动找到**对应项目（不用猜项目名，个人名下和 team 下的项目都会翻；
    也可 `VERCEL_PROJECT=<项目名>` 直接指定）
-2. 把两个变量以 `encrypted` 写进 `production,preview`，写完**回读项目的变量清单**证明真的进去了
+2. 把变量以 `encrypted` 写进 `production,preview`，写完**回读项目的变量清单**证明真的进去了：
+   `CRON_SECRET` / `SUPABASE_SERVICE_ROLE_KEY`，以及 AI 封面用的
+   `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN`（后两项从 `.env.local` 读；缺了只跳过并提示，不影响定时发布）
 3. 触发一次生产重新部署 —— 环境变量的改动**必须重新部署才生效**
 4. 用 `gh` 把同一个 `CRON_SECRET` 写进 GitHub Actions Secret（没装 gh 就打印网页那三步）
 
 密钥来源：`CRON_SECRET` 取「环境变量 → `~/.comebrief-cron-secret` → 都没有就随机生成 64 位十六进制并落盘（0600）」；
-`SUPABASE_SERVICE_ROLE_KEY` 直接从仓库根的 `.env.local` 读 —— 脚本全程不打印值，只回读变量名。
+其余三项直接从仓库根的 `.env.local` 读 —— 脚本全程不打印值，只回读变量名。
+
+> 只想同步 AI 封面、不想动定时发布：给命令加 `ONLY_CLOUDFLARE=1`，
+> 脚本就只写 Cloudflare 两项并重新部署（见 [`docs/ai-cover-env.md`](./ai-cover-env.md)）。
+
+> `.env.local` 在 `.gitignore` 里，**不会随代码上传到 Vercel**。所以凡是只在服务端读
+> `process.env` 的密钥（Cloudflare 两项就是），线上必须在项目环境变量里有副本；
+> 本地能出图、线上报 `Missing env: CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN`
+> 基本都是漏了这一步，见 [`docs/ai-cover-env.md`](./ai-cover-env.md)。
 
 ### 手工配
 
@@ -88,6 +98,8 @@ VERCEL_TOKEN=xxx GH_TOKEN=xxx node scripts/set-deploy-env.mts
 |---|---|---|
 | Vercel 项目（挂 `admin.comebrief.com` 的那个） | `CRON_SECRET` | Settings → Environment Variables（勾 Production + Preview） |
 | 同上 | `SUPABASE_SERVICE_ROLE_KEY` | 同上；值在 Supabase → Project Settings → API → `service_role` |
+| 同上 | `CLOUDFLARE_ACCOUNT_ID` | 同上；Cloudflare 控制台 → Workers & Pages → 右侧 Account ID（AI 封面必需） |
+| 同上 | `CLOUDFLARE_API_TOKEN` | 同上；Cloudflare → My Profile → API Tokens → Workers AI 模板（AI 封面必需） |
 | Vercel | **重新部署一次** | Deployments → 最新那条 → Redeploy（不重新部署等于没配） |
 | GitHub 仓库 `dalin-code/comebrief-admin` | `CRON_SECRET`（与上面同值） | Settings → Secrets and variables → Actions → New repository secret |
 

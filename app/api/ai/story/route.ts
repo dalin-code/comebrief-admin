@@ -142,9 +142,11 @@ export async function POST(req: NextRequest) {
       thinkingBudget: 0,
     })
     if (ai.ok === false) {
-      // 以前这里静默返回：终端一个字都不打，站长只能拿着前端那句话猜
-      console.log(`[ai-story:${reqId}] 模型调用失败`, { status: ai.status, error: ai.error })
-      return jsonResponse({ error: ai.error }, ai.status)
+      // 以前这里静默返回：终端一个字都不打，站长只能拿着前端那句话猜。
+      // details 是「每个候选各失败在哪」（`groq:xxx → 单次请求超 token 上限（HTTP 413）`）——
+      // 一屏只放得下最该先处理的那一条，剩下的必须留在终端里。
+      console.log(`[ai-story:${reqId}] 模型调用失败`, { status: ai.status, error: ai.error, details: ai.details })
+      return jsonResponse({ error: ai.error, kind: ai.kind, details: ai.details }, ai.status)
     }
     if (ai.truncated) warnings.push('模型输出被长度上限截断了，建议用「接着写下去」补完')
 

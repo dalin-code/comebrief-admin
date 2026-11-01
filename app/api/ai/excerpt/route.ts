@@ -129,8 +129,16 @@ export async function POST(req: NextRequest) {
     if (run.cached) console.log(`[ai-excerpt:${reqId}] 复用上次结果（5 分钟内问过同一段正文），这次没花额度`)
     if (ai.ok === false) {
       console.log(`[ai-excerpt:${reqId}] 供应商层失败 → ${ai.status} ${ai.kind} ${ai.error}`)
+      console.log(`[ai-excerpt:${reqId}] 逐条原因：${ai.details.join(' ｜ ')}`)
       return jsonResponse(
-        { error: ai.error, kind: ai.kind, retryable: ai.retryable, retryAfterMs: ai.retryAfterMs, tried: ai.tried },
+        {
+          error: ai.error,
+          kind: ai.kind,
+          retryable: ai.retryable,
+          retryAfterMs: ai.retryAfterMs,
+          tried: ai.tried,
+          details: ai.details,
+        },
         ai.status
       )
     }

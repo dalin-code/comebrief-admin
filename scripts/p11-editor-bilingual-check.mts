@@ -149,5 +149,12 @@ ok(
     /const opening = cleanPromptField\(body\?\.opening, 700\)/.test(drawSource)
 )
 
+ok(
+  '缺 Cloudflare 凭据时提示线上该去哪儿配',
+  /const missingHint =/.test(drawSource) &&
+    /Vercel 项目环境变量（Production \+ Preview）并重新部署/.test(drawSource) &&
+    /hint: missingHint/.test(drawSource)
+)
+
 console.log(`\n结果：${pass} 通过 / ${fail} 失败`)
 process.exit(fail ? 1 : 0)

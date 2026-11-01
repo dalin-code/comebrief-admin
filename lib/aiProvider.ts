@@ -3,12 +3,12 @@
  *
  * 为什么要有这一层：
  *   以前所有 AI 调用都写死「Gemini 直连 + GEMINI_MODEL 一个模型」。
- *   想换模型只能改代码；想换供应商（Claude / DeepSeek / GLM / Kimi）根本没法接。
+ *   想换模型只能改代码；想换供应商（Claude / DeepSeek / GLM / Kimi / Groq）根本没法接。
  *   这里把「调哪个模型」变成**环境变量**，代码只认任务名（story / revise / translate / util）。
  *
  * 支持的三种协议：
  *   1. gemini            —— Google 原生 generateContent（支持 systemInstruction）
- *   2. openai-compat     —— /chat/completions（OpenAI、DeepSeek、智谱、Moonshot、OpenRouter 全兼容）
+ *   2. openai-compat     —— /chat/completions（OpenAI、DeepSeek、智谱、Moonshot、OpenRouter、Groq 全兼容）
  *   3. anthropic         —— /messages（Claude，system 块带 cache_control 做提示缓存）
  *
  * 模型写法（环境变量里填这个）：
@@ -18,6 +18,19 @@
  *   deepseek:deepseek-chat
  *   zhipu:glm-4.6
  *   anthropic:claude-sonnet-5.5
+ *   groq:openai/gpt-oss-120b                      ← Groq 直连（OpenAI 兼容层，base_url 见其官方文档）
+ *   groq:qwen/qwen3.8-27b                         ← Groq 的模型 ID 几乎都自带斜杠，**必须**写 groq: 前缀，
+ *                                                    否则会被 inferProvider 当成 OpenRouter
+ *   ⚠️ 具体哪些模型能用，看 `curl https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY"`；
+ *      llama-3.3-70b-versatile 之类现在标的是 Enterprise（账号没开通就是 model_not_found）。
+ *   siliconflow:deepseek-ai/DeepSeek-V3.2          ← 硅基流动（国际站 .com）
+ *   siliconflow:Qwen/Qwen3.5-122B-A10B             ← 它的模型 ID **全部**是 `组织/模型`，
+ *                                                    和 OpenRouter 完全同形 → 必须写 siliconflow: 前缀，
+ *                                                    漏了会拿 OPENROUTER_API_KEY 去打 OpenRouter（报错跟硅基流动无关）。
+ *   ⚠️ 硅基流动要点：
+ *      ① 只能打 https://api.siliconflow.com（国际站）；同一把 Key 打 .cn 会回 30014 Token is invalid；
+ *      ② 余额为 0 时任何模型都回 HTTP 402 / code 30001（不是没有这个模型，是账户没钱）——
+ *         现在 402 归 kind=quota，提示语会直接说「余额不足」。
  *
  * 按任务分配模型（都不设就回落到 GEMINI_MODEL）：
  *   AI_STORY_MODEL      写正文（最该用贵模型的地方）
@@ -43,7 +56,7 @@ import {
   type ProviderErrorKind,
 } from './aiGemini'
 
-export type AiProviderName = 'gemini' | 'openrouter' | 'anthropic' | 'openai' | 'deepseek' | 'zhipu' | 'moonshot'
+export type AiProviderName = 'gemini' | 'openrouter' | 'anthropic' | 'openai' | 'deepseek' | 'zhipu' | 'moonshot' | 'groq' | 'siliconflow'
 
 type Protocol = 'gemini' | 'openai' | 'anthropic'
 
@@ -55,6 +68,26 @@ const PROVIDERS: Record<AiProviderName, { baseUrl: string; keyEnv: string; proto
   deepseek: { baseUrl: 'https://api.deepseek.com/v1', keyEnv: 'DEEPSEEK_API_KEY', protocol: 'openai', label: 'DeepSeek' },
   zhipu: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4', keyEnv: 'ZHIPU_API_KEY', protocol: 'openai', label: '智谱 GLM' },
   moonshot: { baseUrl: 'https://api.moonshot.cn/v1', keyEnv: 'MOONSHOT_API_KEY', protocol: 'openai', label: 'Moonshot Kimi' },
+  /**
+   * Groq：OpenAI 兼容层（官方 base_url 见 console.groq.com/docs/openai）。
+   * 它跑的是开源模型（llama / gpt-oss / qwen），和 OpenAI 的差别只在模型名，
+   * 所以协议层完全复用 callOpenAiProtocol()，这里只需要登记「地址 + 哪把 Key」。
+   *
+   * 为什么值得接：额度池和 Gemini / OpenAI 完全独立，正好当 AI_MODEL_FALLBACK 里
+   * 那个「真的换了个供应商」的备胎（同一个供应商换模型不算兜底，共享额度）。
+   */
+  groq: { baseUrl: 'https://api.groq.com/openai/v1', keyEnv: 'GROQ_API_KEY', protocol: 'openai', label: 'Groq' },
+  /**
+   * 硅基流动（SiliconFlow）：OpenAI 兼容层，托管 DeepSeek / Qwen / GLM / Kimi 等开源模型。
+   *
+   * ⚠️ baseUrl 必须是 **.com（国际站）**。同一把 `sk-` Key 打 `api.siliconflow.cn` 会回
+   *    `{"code":30014,"message":"Token is invalid."}` —— 看着像 Key 填错，其实只是站选错了（2026-10-26 实测）。
+   * ⚠️ 模型 ID 全是 `组织/模型`（`deepseek-ai/DeepSeek-V3.2`、`Qwen/Qwen3.5-122B-A10B`），
+   *    和 OpenRouter 的 slug 长得一模一样，所以 inferProvider() **不能**给它加规则，
+   *    只能靠显式写 `siliconflow:` 前缀 —— 否则带 Key 去打 OpenRouter，报的错跟硅基流动毫无关系。
+   * ⚠️ 余额为 0 时 /models 能正常列出模型，但每次生成都是 HTTP 402 / `code:30001 account balance insufficient`。
+   */
+  siliconflow: { baseUrl: 'https://api.siliconflow.com/v1', keyEnv: 'SILICONFLOW_API_KEY', protocol: 'openai', label: '硅基流动' },
 }
 
 export type AiTask = 'story' | 'revise' | 'translate' | 'util'
@@ -94,9 +127,23 @@ export function resolveModelSpec(task: AiTask): string {
 function inferProvider(model: string): AiProviderName {
   const m = model.toLowerCase()
   if (m.startsWith('gemini')) return 'gemini'
-  if (m.includes('/')) return 'openrouter' // 带斜杠的基本都是 OpenRouter 的 slug
+  /**
+   * 带斜杠的基本都是 OpenRouter 的 slug。
+   *
+   * ⚠️ 这里**故意**不按前缀区分 SiliconFlow：它的模型 ID（`deepseek-ai/DeepSeek-V3.2`、
+   *    `Qwen/Qwen3.5-122B-A10B`）和 OpenRouter 同形，靠名字猜必然误判，
+   *    所以硅基流动只能显式写 `siliconflow:` 前缀（见 PROVIDERS.siliconflow 注释）。
+   */
+  if (m.includes('/')) return 'openrouter'
   if (m.startsWith('claude')) return 'anthropic'
   if (m.startsWith('deepseek')) return 'deepseek'
+  /**
+   * 裸写 `llama-3.1-8b-instant` 这种不带斜杠的 Groq 招牌模型时也要落到 Groq。
+   * 不加这条会掉进最后的 'openai'，拿 OPENAI_API_KEY 去打 api.openai.com，
+   * 报出来是一句「OPENAI_API_KEY 是空的」—— 和 Groq 一点关系看不出来，纯属误导。
+   * （带斜杠的 `meta-llama/llama-3.3-70b-instruct` 在上面就被判成 OpenRouter 了，不受影响。）
+   */
+  if (m.startsWith('llama')) return 'groq'
   if (m.startsWith('glm')) return 'zhipu'
   if (m.startsWith('kimi') || m.startsWith('moonshot')) return 'moonshot'
   return 'openai'
@@ -171,32 +218,49 @@ const COOLDOWNS = new Map<string, { until: number; reason: ProviderErrorKind }>(
 
 /** 还要冷却多少毫秒（0 = 现在就能用） */
 export function cooldownLeftMs(spec: string): number {
+  return cooldownState(spec)?.leftMs ?? 0
+}
+
+/**
+ * 冷却详情：剩多少 + **上一轮是什么原因挂的**。
+ *
+ * 为什么要带上原因：候选被冷却挡住时（本轮压根没问它），提示语里只说「还剩 4 秒」，
+ * 站长根本不知道它是「被限流」还是「余额为 0」。把原因一路带到 composeFailure 的 details，
+ * 才能写出「本轮没问：冷却中（剩 4 秒，上次是额度/余额不足）」。
+ */
+export function cooldownState(spec: string): { leftMs: number; reason: ProviderErrorKind } | null {
   const hit = COOLDOWNS.get(spec)
-  if (!hit) return 0
+  if (!hit) return null
   const left = hit.until - Date.now()
   if (left <= 0) {
     COOLDOWNS.delete(spec)
-    return 0
+    return null
   }
-  return left
+  return { leftMs: left, reason: hit.reason }
 }
 
 /**
  * 冷却多久：对面给了时间就听它的（封顶 30 分钟），没给就按原因给个保守值。
  *
- * 三类才进冷却：rate / quota / server。
- *   · rate、quota 是「别问了」，重复问还会继续吃 RPM 计数（等于自己给自己加限流）；
+ * 四类才进冷却：rate / quota / toolarge / server。
+ *   · rate、quota、toolarge 是「别问了」，重复问还会继续吃 RPM / TPM 计数（等于自己给自己加限流）；
  *   · server（5xx / 网络断 / 超时）是「现在问了也白等」—— 这一条是实测补的：
  *     线上 gemini-3.8-flash 连回两次 503/超时，如果不记冷却，用户每次点「生成摘要」
  *     都要先陪它耗 20 秒才轮到兜底模型，体感就是「点了半天没反应」。
  *   · 404 / 400 / 401 这种「配置错了」**不记** —— 否则站长改完 .env.local 还得干等冷却过去。
+ *
+ * 402（余额不足）单独给 10 分钟：它不是「过一会儿就好」，一分钟冷却只会让每次点击都去撞
+ * 一堵写着「no credit」的墙（而真正的死因还会被冷却提示盖住，2026-10-26 那次）。
+ * 之所以不设 30 分钟：刚充完值的人不该被自己的冷却挡在门外 —— 10 分钟足够挡住连点，
+ * 想立刻验证就走自检的「真调一次」（它会 ignoreCooldown）。
  */
-function markCooldown(spec: string, kind: ProviderErrorKind, retryAfterMs: number) {
-  if (kind !== 'rate' && kind !== 'quota' && kind !== 'server') return
-  const fallback = kind === 'quota' ? 60_000 : kind === 'server' ? 45_000 : 15_000
+function markCooldown(spec: string, kind: ProviderErrorKind, retryAfterMs: number, status = 0) {
+  if (kind !== 'rate' && kind !== 'quota' && kind !== 'toolarge' && kind !== 'server') return
+  const fallback =
+    status === 402 ? 10 * 60_000 : kind === 'quota' ? 60_000 : kind === 'toolarge' ? 60_000 : kind === 'server' ? 45_000 : 15_000
   const ms = Math.min(Math.max(retryAfterMs || fallback, 5_000), 30 * 60 * 1000)
   COOLDOWNS.set(spec, { until: Date.now() + ms, reason: kind })
-  console.log(`[ai-provider] ${spec} 进入冷却 ${Math.round(ms / 1000)}s（${kind}）`)
+  console.log(`[ai-provider] ${spec} 进入冷却 ${Math.round(ms / 1000)}s（${kind}${status ? ` / HTTP ${status}` : ''}）`)
 }
 
 /** 冷却快照 —— `/api/ai/status` 自检页和 describeAiRouting 用 */
@@ -282,6 +346,11 @@ export type CallTextResult =
       retryable: boolean
       /** 这一轮实际试过的模型写法，报错和日志都用它 */
       tried: string[]
+      /**
+       * 每个候选**各**失败在哪 —— 一行一个（`groq:xxx → 单次请求超上限（HTTP 413）`）。
+       * 提示框只有一行宽，放不下；它进终端日志和响应体，排查时一眼看出「不是没配兜底，是全倒了」。
+       */
+      details: string[]
     }
 
 type RawResult =
@@ -293,7 +362,7 @@ type RawResult =
       retryable: boolean
       /** 网络层断线（压根没跟对面说上话），不是对方回的错 */
       network?: boolean
-      /** rate / quota / auth / notfound / badrequest / server / unknown —— 选下一个模型、进冷却、报错收敛都靠它 */
+      /** rate / quota / auth / notfound / badrequest / toolarge / server / unknown —— 选下一个模型、进冷却、报错收敛都靠它 */
       kind: ProviderErrorKind
       /** 对面建议的等待毫秒数；0 = 没说 */
       retryAfterMs: number
@@ -382,11 +451,22 @@ async function callGeminiProtocol(target: ResolvedTarget, o: CallTextOptions): P
 
   if (!String(text).trim()) {
     const blocked = data?.promptFeedback?.blockReason
+    const finish = String(cand?.finishReason || '')
+    /**
+     * 空内容 + finishReason=MAX_TOKENS：不是模型挂了，是 maxOutputTokens 太小 ——
+     * 推理模型（gemini-3.x 的 thinking、gpt-oss）会把额度全花在思考上，最后一个字都没吐。
+     * 归 badrequest：模型本身是健康的，不该因为「我给的额度太小」冷却它 45 秒。
+     */
+    const starved = finish === 'MAX_TOKENS'
     return {
       ok: false,
       status: 502,
-      error: blocked ? `内容被模型安全策略拦下了（${blocked}），换个题材或构思再试` : `模型返回了空内容${cand?.finishReason ? `（${cand.finishReason}）` : ''}`,
-      kind: 'server',
+      error: blocked
+        ? `内容被模型安全策略拦下了（${blocked}），换个题材或构思再试`
+        : starved
+          ? '模型没出字就停了（finishReason=MAX_TOKENS）：maxOutputTokens 太小、被思考吃光了 —— 调大（正文 8192，杂活 ≥512）再试'
+          : `模型返回了空内容${finish ? `（${finish}）` : ''}`,
+      kind: starved || blocked ? 'badrequest' : 'server',
       retryAfterMs: 0,
       retryable: false,
     }
@@ -439,7 +519,20 @@ async function callOpenAiProtocol(target: ResolvedTarget, o: CallTextOptions): P
   const choice = data?.choices?.[0]
   const text = choice?.message?.content ?? ''
   if (!String(text).trim()) {
-    return { ok: false, status: 502, error: `模型返回了空内容（finish_reason=${choice?.finish_reason || '未知'}）`, retryable: false, kind: 'server', retryAfterMs: 0 }
+    const finish = String(choice?.finish_reason || '')
+    // finish_reason=length 且一个字都没吐 = 额度被思考吃光（gpt-oss 这类推理模型常见），
+    // 不是服务端故障 —— 归 badrequest，别让健康的模型进 45 秒冷却
+    const starved = finish === 'length'
+    return {
+      ok: false,
+      status: 502,
+      error: starved
+        ? '模型没出字就停了（finish_reason=length）：maxOutputTokens 太小、被思考吃光了 —— 调大（推理模型 ≥512）再试'
+        : `模型返回了空内容（finish_reason=${finish || '未知'}）`,
+      retryable: false,
+      kind: starved ? 'badrequest' : 'server',
+      retryAfterMs: 0,
+    }
   }
   return { ok: true, text: String(text), truncated: choice?.finish_reason === 'length' }
 }
@@ -485,7 +578,19 @@ async function callAnthropicProtocol(target: ResolvedTarget, o: CallTextOptions)
     .map((c: any) => c.text || '')
     .join('')
   if (!String(text).trim()) {
-    return { ok: false, status: 502, error: `模型返回了空内容（stop_reason=${data?.stop_reason || '未知'}）`, retryable: false, kind: 'server', retryAfterMs: 0 }
+    const stop = String(data?.stop_reason || '')
+    // stop_reason=max_tokens 且没出字：额度被思考吃光，不是服务端故障
+    const starved = stop === 'max_tokens'
+    return {
+      ok: false,
+      status: 502,
+      error: starved
+        ? '模型没出字就停了（stop_reason=max_tokens）：maxOutputTokens 太小、被思考吃光了 —— 调大再试'
+        : `模型返回了空内容（stop_reason=${stop || '未知'}）`,
+      retryable: false,
+      kind: starved ? 'badrequest' : 'server',
+      retryAfterMs: 0,
+    }
   }
   return { ok: true, text, truncated: data?.stop_reason === 'max_tokens' }
 }
@@ -593,16 +698,34 @@ async function callOnce(target: ResolvedTarget, o: CallTextOptions): Promise<Raw
  * 而两个模型同时 429 时这两句几乎一模一样 —— 站长看到的就是一屏红字、信息量为零
  * （2026-10-10 截图）。现在：
  *   · 全是同一类原因 → 只说一句，并列出都试过谁
- *   · 原因各不相同 → 只报最该先处理的那一条（配置错 > 额度 > 限流 > 服务抖动）
+ *   · 原因各不相同 → 只报最该先处理的那一条（配置错 > 额度/余额 > 模型名 > 请求被拒 > 请求过大 > 限流 > 服务抖动）
+ *
+ * ⚠️ 2026-10-26 的教训：「还在冷却、压根没问」的那条候选**永远不能**当主因。
+ *    当时的四个候选全是真失败（402 余额不足 ×2、413 TPM 超限、日额度用尽），
+ *    但其中一条是上一轮留下的 `cold`（kind=rate，优先级 5），于是 composeFailure 选出它，
+ *    屏幕上写的是「gemini-3.5-flash 还在冷却（剩 4 秒）」—— 四个真实死因一个字都没露。
  */
 const KIND_PRIORITY: Record<ProviderErrorKind, number> = {
   auth: 0, // 配置错了，必须先修，别的都白搭
-  quota: 1, // 换模型立刻见效
+  quota: 1, // 换模型 / 充钱立刻见效
   notfound: 2,
   badrequest: 3,
-  rate: 4, // 等一会儿就好
-  server: 5,
-  unknown: 6,
+  toolarge: 4, // 这一次请求太大：调小 maxOutputTokens 就能过
+  rate: 5, // 等一会儿就好
+  server: 6,
+  unknown: 7,
+}
+
+/** kind → 四个字以内的人话（details 每行用，提示框不放） */
+const KIND_LABEL: Record<ProviderErrorKind, string> = {
+  auth: 'Key 被拒',
+  quota: '额度/余额不足',
+  notfound: '模型名不存在',
+  badrequest: '请求被拒',
+  toolarge: '单次请求超 token 上限',
+  rate: '被限流',
+  server: '服务端/网络异常',
+  unknown: '未知错误',
 }
 
 type Failure = {
@@ -613,6 +736,8 @@ type Failure = {
   retryAfterMs: number
   /** true = 这条不是「刚问过它失败了」，而是「它还在冷却期，压根没问」（提示语要说清楚） */
   cold?: boolean
+  /** true = 连请求都没发出去（缺 Key、模型写法解析不了），details 里别编一个 HTTP 码出来 */
+  noHttp?: boolean
 }
 
 const secs = (ms: number) => Math.max(1, Math.round(ms / 1000))
@@ -626,9 +751,17 @@ function composeFailure(tried: Failure[]) {
       kind: 'unknown' as ProviderErrorKind,
       retryAfterMs: 0,
       retryable: false,
+      details: [] as string[],
     }
   }
   const names = tried.map((t) => t.spec).join('、')
+  /** 每个候选一行：谁、为什么、HTTP 几（冷却中的注明「压根没问」，别让人以为是刚失败） */
+  const details = tried.map(
+    (t) =>
+      `${t.spec} → ${KIND_LABEL[t.kind]}${t.status && !t.noHttp ? `（HTTP ${t.status}）` : ''}${
+        t.cold ? `；本轮没问：冷却中，剩 ${secs(t.retryAfterMs)} 秒` : ''
+      }`
+  )
 
   if (tried.length > 1 && tried.every((t) => t.kind === first.kind)) {
     if (first.kind === 'rate') {
@@ -641,6 +774,7 @@ function composeFailure(tried: Failure[]) {
           kind: first.kind,
           retryAfterMs: soonest,
           retryable: true,
+          details,
         }
       }
       const wait = first.retryAfterMs > 0 ? `约 ${secs(first.retryAfterMs)} 秒后恢复` : '缓十几秒'
@@ -650,27 +784,41 @@ function composeFailure(tried: Failure[]) {
         kind: first.kind,
         retryAfterMs: first.retryAfterMs,
         retryable: true,
+        details,
       }
     }
     if (first.kind === 'quota') {
+      // 402（没钱）和 429（这个池子今天到顶）出路不同：一个只能充钱，一个换模型就行
+      const broke = tried.some((t) => t.status === 402)
       return {
-        status: 429,
-        error: `${names} 的免费额度都用完了：换个模型立刻能写（AI_*_MODEL 或 AI_MODEL_FALLBACK）`,
+        status: broke ? 402 : 429,
+        error: broke
+          ? `${names} 都余额不足：给其中一家充值，或换上还有额度的模型（AI_*_MODEL / AI_MODEL_FALLBACK）`
+          : `${names} 的免费额度都用完了：换个模型立刻能写（AI_*_MODEL 或 AI_MODEL_FALLBACK）`,
         kind: first.kind,
         retryAfterMs: first.retryAfterMs,
         retryable: false,
+        details,
       }
     }
   }
 
-  const worst = [...tried].sort((a, b) => KIND_PRIORITY[a.kind] - KIND_PRIORITY[b.kind])[0]
+  /**
+   * 主因只在「真被问过」的候选里挑 —— cold 那条压根没发请求，它说不出别的模型为什么挂。
+   * 全部都是 cold 时（上一轮的失败全在冷却）才退回用它们。
+   */
+  const asked = tried.filter((t) => !t.cold)
+  const pool = asked.length ? asked : tried
+  const worst = [...pool].sort((a, b) => KIND_PRIORITY[a.kind] - KIND_PRIORITY[b.kind])[0]
   return {
-    status: worst.status,
+    // cold 的 status 是 0（这一轮压根没发请求），不能当 HTTP 状态码返回给前端
+    status: worst.status || 429,
     // 试了不止一个就把名单缀上 —— 一眼看出「不是没配兜底，是兜底也倒了」
     error: tried.length > 1 ? `${worst.error}（都已试过：${names}）` : worst.error,
     kind: worst.kind,
     retryAfterMs: worst.retryAfterMs,
     retryable: worst.kind === 'rate' || worst.kind === 'server',
+    details,
   }
 }
 
@@ -680,8 +828,6 @@ function topWait(cur: Failure | null, next: Failure): Failure | null {
   return next.retryAfterMs < cur.retryAfterMs ? next : cur
 }
 
-/**
- * 调用一次文本生成 —— 全站 AI 功能统一走这里。
 /**
  * 调用一次文本生成 —— 全站 AI 功能统一走这里。
  *
@@ -715,20 +861,22 @@ export async function callText(o: CallTextOptions): Promise<CallTextResult> {
     const resolved = resolveTarget(spec)
     if (resolved.ok === false) {
       console.log(`[ai-provider] 跳过 ${spec}：${resolved.error}`)
-      tried.push({ spec, status: 500, error: resolved.error, kind: 'auth', retryAfterMs: 0 })
+      tried.push({ spec, status: 500, error: resolved.error, kind: 'auth', retryAfterMs: 0, noHttp: true })
       continue
     }
     provider = resolved.target.provider
 
     // 刚挂过的模型先别问 —— 429 本身还在吃限流计数，重复问它等于自己给自己加限流
-    const left = o.ignoreCooldown ? 0 : cooldownLeftMs(spec)
-    if (left > 0) {
-      console.log(`[ai-provider] 跳过 ${spec}：还在冷却（剩 ${secs(left)}s）`)
+    const cool = o.ignoreCooldown ? null : cooldownState(spec)
+    if (cool) {
+      const left = cool.leftMs
+      console.log(`[ai-provider] 跳过 ${spec}：还在冷却（剩 ${secs(left)}s，上次 ${cool.reason}）`)
       const cold: Failure = {
         spec,
-        status: 429,
-        error: `${spec} 刚失败过，还在冷却（剩 ${secs(left)} 秒）`,
-        kind: 'rate',
+        // status 留 0：这一轮**没有真的发请求**，别在 details 里写一个假的 HTTP 码
+        status: 0,
+        error: `${spec} 刚失败过（${KIND_LABEL[cool.reason]}），还在冷却（剩 ${secs(left)} 秒）`,
+        kind: cool.reason,
         retryAfterMs: left,
         cold: true,
       }
@@ -769,7 +917,7 @@ export async function callText(o: CallTextOptions): Promise<CallTextResult> {
 
     const fail: Failure = { spec, status: r.status, error: r.error, kind: r.kind, retryAfterMs: r.retryAfterMs }
     tried.push(fail)
-    markCooldown(spec, r.kind, r.retryAfterMs)
+    markCooldown(spec, r.kind, r.retryAfterMs, r.status)
     if (fail.kind === 'rate' && fail.retryAfterMs > 0) waitAndRetry = topWait(waitAndRetry, fail)
     if (i === 0 && chain.length > 1) {
       console.log(`[ai-provider] ${resolved.target.label}/${resolved.target.model} 失败（${r.kind}），继续试后面的候选`)
@@ -815,22 +963,29 @@ export async function callText(o: CallTextOptions): Promise<CallTextResult> {
           retryAfterMs: r.retryAfterMs,
         }
         tried.push(fail)
-        markCooldown(fail.spec, fail.kind, fail.retryAfterMs)
+        markCooldown(fail.spec, fail.kind, fail.retryAfterMs, r.status)
       }
     }
   }
 
   const failure = composeFailure(tried)
+  // 一行一条，终端里能直接看出「哪个候选、为什么、HTTP 几」—— 提示框放不下，日志必须有
+  if (failure.details.length) console.log(`[ai-provider] 候选逐条：\n  ${failure.details.join('\n  ')}`)
+  // provider 要跟着「最后一个真的试过的候选」走：中途因为预算不足 break 时，
+  // 循环里最后一次赋值的 provider 可能是压根没发请求的那个，报给前端就是假信息。
+  const lastSpec = tried[tried.length - 1]?.spec || primarySpec
+  const lastResolved = resolveTarget(lastSpec)
   return {
     ok: false,
     status: failure.status,
     error: failure.error,
-    model: tried[tried.length - 1]?.spec || primarySpec,
-    provider,
+    model: lastSpec,
+    provider: lastResolved.ok === true ? lastResolved.target.provider : provider,
     kind: failure.kind,
     retryAfterMs: failure.retryAfterMs,
     retryable: failure.retryable,
     tried: tried.map((t) => t.spec),
+    details: failure.details,
   }
 }
 

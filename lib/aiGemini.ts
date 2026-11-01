@@ -152,8 +152,17 @@ export const extractProviderMessage = (raw: string) => {
  *      anthropic-ratelimit-requests-reset，是个 ISO 时间戳）。
  *   ④ 什么线索都没有 → 当「限流」处理。宁可让站长等十几秒再点一次，
  *      也别让他去改 .env.local（那才是真的白折腾）。
+ *
+ * 402 / 413 为什么要单列（2026-10-26 四个候选全挂那次的教训）：
+ *   以前这两种状态码掉进 default → `unknown`，于是
+ *     · 冷却表不收（unknown 不冷却），每次点都把 402 的供应商白打一遍；
+ *     · 提示语是「报 402：Sorry, your account balance is insufficient」——
+ *       错把「该充钱」说成了「服务异常，等几秒重试」；
+ *     · composeFailure 里 unknown 优先级最低，真实原因还会被「冷却剩 4 秒」盖掉。
+ *   402 = 余额不足（OpenRouter 按 max_tokens 预扣、硅基流动 code 30001）→ 归 quota，30 分钟冷却；
+ *   413 = 单次请求超过对面每分钟 token 上限（Groq 免费档 8000 TPM）→ 单列 toolarge，60 秒冷却。
  */
-export type ProviderErrorKind = 'rate' | 'quota' | 'auth' | 'notfound' | 'badrequest' | 'server' | 'unknown'
+export type ProviderErrorKind = 'rate' | 'quota' | 'auth' | 'notfound' | 'badrequest' | 'toolarge' | 'server' | 'unknown'
 
 export type ParsedProviderError = {
   kind: ProviderErrorKind
@@ -224,6 +233,26 @@ export const parseProviderError = (status: number, raw: string, headers?: Header
     return { kind, retryAfterMs, code: quotaId, detail }
   }
   if (status === 401 || status === 403) return { kind: 'auth', retryAfterMs, code: '', detail }
+  if (status === 402) {
+    // 不是「服务抖动」，是「账户没钱」：等多久都不会好。硅基流动回 code=30001，
+    // OpenRouter 会附 total_credits / 「can only afford N tokens」（它按 max_tokens 预扣额度）。
+    const code = (() => {
+      try {
+        const j: any = JSON.parse(String(raw || '').trim())
+        const c = j?.code ?? j?.error?.code ?? j?.error?.metadata?.limit
+        return c == null ? '' : String(c)
+      } catch {
+        return ''
+      }
+    })()
+    return { kind: 'quota', retryAfterMs, code, detail }
+  }
+  if (status === 413) {
+    // Groq 免费档 8000 TPM：一次长文（提示词 + max_tokens 8192）就顶爆，
+    // 它把「你这次请求的 token 太多」也报成 413。归 toolarge —— 调小 maxOutputTokens 就能过，
+    // 跟「服务挂了吗」完全是两件事。
+    return { kind: 'toolarge', retryAfterMs, code: '', detail }
+  }
   if (status === 404) return { kind: 'notfound', retryAfterMs, code: '', detail }
   if (status === 400 || status === 422) return { kind: 'badrequest', retryAfterMs, code: '', detail }
   if (status >= 500) return { kind: 'server', retryAfterMs, code: '', detail }
@@ -253,6 +282,10 @@ export const describeProviderError = (
     case 'rate':
       return `${who} 被限流了：${wait ? `${wait}，` : '缓十几秒'}再点一次就行`
     case 'quota':
+      // 402 和 429 都是「没额度了」，但出路完全不同：429 是等重置/换模型，402 只能充钱。
+      if (status === 402) {
+        return `${who} 余额不足（报 402${parsed.code ? ` / code ${parsed.code}` : ''}）：去给这个供应商充值，或换一家有额度的模型`
+      }
       // 额度用尽时「等多久」基本等于「等明天」，写在提示里只会让人误判 —— 直接给唯一的出路：换模型
       return `${who} 免费额度用完了：换个模型立刻能写（AI_*_MODEL / AI_MODEL_FALLBACK）`
     case 'auth':
@@ -261,6 +294,9 @@ export const describeProviderError = (
       return `${who} 报 404：这个模型名不存在，或者这把 Key 用不了它`
     case 'badrequest':
       return `${who} 报 ${status}：请求被模型拒绝了${detail ? `（${detail.slice(0, 100)}）` : ''}`
+    case 'toolarge':
+      // 413 = 这一次请求的 token 太多，不是服务坏了；Groq 免费档 8000 TPM 一次长文就顶爆
+      return `${who} 报 413：单次请求超了每分钟 token 上限（免费档常见 8000 TPM），调小 maxOutputTokens 或换模型`
     case 'server':
       return `${who} 报 ${status}：模型服务暂时不稳定，等几秒重试一次`
     default:

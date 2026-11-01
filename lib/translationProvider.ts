@@ -185,10 +185,10 @@ export function mtCooldownLeftMs(spec: string): number {
   return left
 }
 
-/** rate / quota / 5xx 才进冷却；404 / 401 这种「配置错了」不记（改完配置该立刻能试） */
+/** rate / quota / toolarge / 5xx 才进冷却；404 / 401 这种「配置错了」不记（改完配置该立刻能试） */
 function markMtCooldown(spec: string, kind: ProviderErrorKind, retryAfterMs: number) {
-  if (kind !== 'rate' && kind !== 'quota' && kind !== 'server') return
-  const fallback = kind === 'quota' ? 60_000 : kind === 'server' ? 45_000 : 15_000
+  if (kind !== 'rate' && kind !== 'quota' && kind !== 'toolarge' && kind !== 'server') return
+  const fallback = kind === 'quota' ? 60_000 : kind === 'toolarge' ? 60_000 : kind === 'server' ? 45_000 : 15_000
   const ms = Math.min(Math.max(retryAfterMs || fallback, 5_000), 30 * 60 * 1000)
   MT_COOLDOWNS.set(spec, { until: Date.now() + ms, reason: kind })
   console.log(`[mt-provider] ${spec} 进入冷却 ${Math.round(ms / 1000)}s（${kind}）`)
@@ -339,8 +339,9 @@ async function readMtResponse(provider: MtProviderName, label: string, spec: str
     error: describeMtError(label, res.status, rawText, res.headers),
     kind: parsed.kind,
     retryAfterMs: parsed.retryAfterMs,
-    // auth / notfound / badrequest 是「配置问题」，重试没意义；其余可以再试
-    retryable: parsed.kind !== 'auth' && parsed.kind !== 'notfound' && parsed.kind !== 'badrequest',
+    // auth / notfound / badrequest / toolarge 是「配置/请求本身的问题」，原样重试没意义；其余可以再试
+    retryable:
+      parsed.kind !== 'auth' && parsed.kind !== 'notfound' && parsed.kind !== 'badrequest' && parsed.kind !== 'toolarge',
   }
 }
 

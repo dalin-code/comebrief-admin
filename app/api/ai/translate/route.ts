@@ -249,6 +249,7 @@ export async function POST(req: NextRequest) {
 
       // 没配兜底引擎（AI_TRANSLATE_MT_FALLBACK 为空）→ 保持原样，把 LLM 的错原封不动报上去
       // 结构化字段一起给出去：前端靠 retryAfterMs 决定「等一会儿自动重发这一段」还是直接报错
+      console.log(`[ai-translate:${reqId}] LLM 链全挂，逐条原因：${ai.details.join(' ｜ ')}`)
       return jsonResponse(
         {
           error: ai.error,
@@ -256,6 +257,7 @@ export async function POST(req: NextRequest) {
           retryable: ai.retryable,
           retryAfterMs: ai.retryAfterMs,
           tried: ai.tried,
+          details: ai.details,
         },
         ai.status
       )

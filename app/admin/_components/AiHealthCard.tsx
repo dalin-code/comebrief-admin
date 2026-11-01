@@ -337,6 +337,14 @@ function StatusBody({ data }: { data: StatusData }) {
       </div>
       <p className="text-[9px] text-slate-400 font-bold leading-relaxed">
         上面那行是「哪把 Key 配了」；缺哪个供应商的 Key，就用不了哪个供应商的模型。
+        {'　'}Groq 的模型要写「groq:」前缀（如 groq:openai/gpt-oss-120b）——
+        它的模型 ID 几乎都自带斜杠，不写前缀会被当成 OpenRouter，报的错和 Groq 完全无关。
+        {'　'}硅基流动同理，必须写「siliconflow:」前缀（如 siliconflow:deepseek-ai/DeepSeek-V3.2），
+        而且只认国际站 api.siliconflow.com（同一把 Key 打 .cn 会回 30014 Token is invalid）。
+        {'　'}Key 打 ✓ 只说明「配了」，不代表「能用」：余额为 0 时照样每次生成都失败（HTTP 402 / code 30001），
+        想确认就点「真调一次」—— 自检的问句只有两个字，测不出余额和每分钟 token 上限。
+        {'　'}CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN 只给「AI 生成封面 / 重绘」用，缺了不影响写稿，
+        但点封面按钮会报 Missing env。
         {'　'}「翻译兜底」那一块是 LLM 全挂时才启用的机翻救命绳（方案 3），平时不参与生成，
         缺 Key 不算问题；想配就看 docs/translation-layered-architecture.md。
         {data.memo.entries > 0 ? `　记忆里存了 ${data.memo.entries} 条摘要（5 分钟内重复点不会重复花额度）。` : ''}
