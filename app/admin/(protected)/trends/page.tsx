@@ -7,6 +7,7 @@ import {
   Layers, CheckSquare, Square, Tag, Sparkles, TrendingUp, Globe, Star, AlertCircle
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import IndexNowButton from '@/app/admin/_components/IndexNowButton'
 import {
   effectiveStatus,
   markPublishedLocally,
@@ -255,8 +256,9 @@ export default function TrendsManagementHub() {
             <h1 className="text-4xl md:text-5xl font-black italic tracking-tighter uppercase">TRENDS <span className="text-slate-200">/</span> <span className="text-emerald-500">MATRIX</span></h1>
             <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-400">Content Control Center</p>
           </div>
-          <div className="flex gap-3 w-full md:w-auto">
+          <div className="flex gap-3 w-full md:w-auto flex-wrap">
             <button onClick={handlePublishDue} disabled={publishing} title="把已到点的定时内容立即翻为已发布（外部定时器漏跑时的兜底入口）" className="flex-1 md:flex-none h-14 px-6 bg-white border border-slate-200 rounded-[20px] flex items-center justify-center gap-3 font-black text-[10px] uppercase hover:bg-slate-50 transition-all disabled:opacity-60"><Zap size={16} className="text-amber-500"/> {publishing ? 'Publishing...' : 'Publish Due'}</button>
+            <IndexNowButton className="flex-1 md:flex-none h-14 px-6 rounded-[20px] text-[10px]" iconSize={16} />
             <button onClick={handlePremiumSync} className="flex-1 md:flex-none h-14 px-6 bg-white border border-slate-200 rounded-[20px] flex items-center justify-center gap-3 font-black text-[10px] uppercase hover:bg-slate-50 transition-all"><Sparkles size={16} className="text-indigo-500"/> AI Premium x3</button>
             <Link href="/admin/trends/edit" className="h-14 bg-slate-900 text-white px-8 rounded-[24px] flex items-center justify-center gap-3 font-black hover:bg-emerald-600 transition-all shadow-xl shadow-emerald-500/10 active:scale-95 group"><Plus size={20} /><span>NEW POST</span></Link>
           </div>

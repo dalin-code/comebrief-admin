@@ -9,6 +9,7 @@ import {
 import { useRouter } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import { effectiveStatus, markPublishedLocally, publishDueRows } from '@/lib/scheduled';
+import IndexNowButton from '@/app/admin/_components/IndexNowButton';
 
 // --- 🚀 状态呈现 ---
 // 与 articles 保持同一套语义：published / draft / scheduled / failed。
@@ -130,6 +131,7 @@ export default function StoryListPage() {
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={14} />
                 <input className="bg-white border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-[10px] font-bold uppercase outline-none focus:border-slate-900 transition-all w-48 shadow-sm" placeholder="搜索..." />
              </div>
+             <IndexNowButton className="px-6 py-2.5 rounded-xl text-[10px]" />
              <button 
                onClick={() => router.push('/admin/stories/create')}
                className="bg-slate-900 text-white px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-black shadow-lg transition-all flex items-center gap-2"

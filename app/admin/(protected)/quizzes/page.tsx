@@ -10,6 +10,7 @@ import {
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase"; // 🚀 关键：必须使用 import 进来的单例，不要在组件内 createClient
 import { effectiveStatus, markPublishedLocally, publishDueRows } from "@/lib/scheduled";
+import IndexNowButton from '@/app/admin/_components/IndexNowButton';
 
 // --- 🚀 状态呈现 ---
 // 与 articles / stories 同一套语义：published / draft / scheduled / failed。
@@ -134,7 +135,8 @@ export default function QuizListPage() {
             </h1>
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] mt-2">Manage your interactive matrix</p>
           </div>
-          <div className="flex gap-4">
+          <div className="flex gap-4 flex-wrap justify-end">
+            <IndexNowButton className="px-8 py-4 rounded-2xl text-[10px]" iconSize={16} />
             <button 
               onClick={() => { setIsRefreshing(true); fetchQuizzes(true); }}
               className="p-4 bg-white border border-slate-200 text-slate-400 hover:text-slate-900 rounded-2xl transition-all"
