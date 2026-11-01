@@ -152,7 +152,7 @@ export default function StoryListPage() {
             </div>
           ) : (
             stories.map((story) => {
-              const episodeCount = story.raw_data?.episodes?.length || 0;
+              const episodeCount = story.raw_data?.chapters?.length || story.raw_data?.episodes?.length || 0;
               return (
                 <div 
                   key={story.id} 

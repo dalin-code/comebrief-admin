@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from '@/lib/supabase';
+import StoryTextImport from '@/app/admin/_components/StoryTextImport';
+import type { ChapterDraft } from '@/lib/storyImport';
 
 function PublisherStudioContent() {
   const router = useRouter();
@@ -121,6 +123,101 @@ function PublisherStudioContent() {
     }
   };
 
+  /**
+   * 写 stories 表 —— 发布与导入共用。
+   *
+   * 阶段 0 的 SQL 还没跑时，status / scheduled_at / is_featured 这些列并不存在。
+   * 沿用后台已有的「缺列就剔除该字段重试」策略，避免整套保存流程直接失败。
+   * insert 时带 .select('id')：新作品导入完要靠它把地址换成 ?id=xxx，
+   * 否则用户再点一次保存会又插一条重复作品。
+   */
+  const writeStoryRow = async (payload: any) => {
+    let current: any = { ...payload };
+    let lastError: any = null;
+
+    for (let i = 0; i < 6; i++) {
+      const res = editId
+        ? await supabase.from('stories').update(current).eq('id', editId)
+        : await supabase.from('stories').insert([current]).select('id');
+
+      if (!res.error) {
+        const rows = (res.data as any[] | null) || [];
+        return { ok: true as const, id: (rows[0]?.id as string | undefined) ?? undefined };
+      }
+
+      lastError = res.error;
+      const msg = String(res.error.message || '');
+      const m1 = msg.match(/Could not find the '([^']+)' column/i);
+      const m2 = msg.match(/column\s+stories\.([a-zA-Z0-9_]+)\s+does\s+not\s+exist/i);
+      const missing = (m1?.[1] || m2?.[1] || '').trim();
+      if (missing && Object.prototype.hasOwnProperty.call(current, missing)) {
+        const next: any = { ...current };
+        delete next[missing];
+        current = next;
+        continue;
+      }
+      break;
+    }
+    return { ok: false as const, error: lastError };
+  };
+
+  /**
+   * 智能分章的落库路径（StoryTextImport 的 onApply）。
+   *
+   * 三条硬规则（和「发布」路径刻意分开）：
+   *   ① 只写 title / cover_url / content / raw_data —— 不碰 status / active / published_at，
+   *      否则「编辑一篇已发布的作品再导入稿件」会把它悄悄下线；
+   *   ② 新作品补草稿默认值（status=draft、active=false）；
+   *   ③ 新作品写完立刻 router.replace(?id=xxx)，防止重复插入。
+   */
+  const applyImportedChapters = async (
+    chapters: ChapterDraft[],
+    mode: 'replace' | 'append'
+  ): Promise<boolean> => {
+    const existing = Array.isArray(storyData.chapters) ? storyData.chapters : [];
+    // 追加时丢掉空占位章（新建作品默认带一章没正文的「第一章：序幕」）
+    const kept = existing.filter((c: any) => String(c?.content_text || '').trim().length > 0);
+    const nextChapters = mode === 'append' ? [...kept, ...chapters] : chapters;
+
+    const nextTitle =
+      String(storyData.title || '').trim() || String(chapters[0]?.title || '').trim() || '未命名作品';
+    const nextData = { ...storyData, title: nextTitle, chapters: nextChapters };
+
+    const payload: any = {
+      title: nextTitle,
+      cover_url: storyData.cover_url || '',
+      content: nextChapters[0]?.content_text || '',
+      raw_data: nextData,
+    };
+    if (!editId) {
+      payload.status = 'draft';
+      payload.active = false;
+      payload.scheduled_at = null;
+    }
+
+    setIsSaving(true);
+    try {
+      const result = await writeStoryRow(payload);
+      if (!result.ok) throw result.error || new Error('save failed');
+
+      setStoryData(nextData);
+      setCurrentChapterIndex(0);
+      if (!editId && result.id) router.replace(`/admin/stories/create?id=${result.id}`);
+
+      const chars = nextChapters.reduce(
+        (sum: number, c: any) => sum + String(c?.content_text || '').replace(/\s+/g, '').length,
+        0
+      );
+      showToast(`已导入 ${chapters.length} 章 · ${chars} 字（已存草稿）`, 'success');
+      return true;
+    } catch (err: any) {
+      showToast(`导入写库失败: ${err.message}`, 'error');
+      return false;
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   // 3. 🚀 发布/更新
   const handleFinalSave = async () => {
     if (!storyData.title.trim()) {
@@ -162,31 +259,9 @@ function PublisherStudioContent() {
       if (isLive) payload.published_at = new Date().toISOString();
 
       // 阶段 0 的 SQL 还没跑时，status / scheduled_at / is_featured 这些列并不存在。
-      // 沿用后台已有的「缺列就剔除该字段重试」策略，避免整套保存流程直接失败。
-      let current: any = { ...payload };
-      let saved = false;
-      let lastError: any = null;
-      for (let i = 0; i < 6; i++) {
-        const res = editId
-          ? await supabase.from('stories').update(current).eq('id', editId)
-          : await supabase.from('stories').insert([current]);
-
-        if (!res.error) { saved = true; break; }
-
-        lastError = res.error;
-        const msg = String(res.error.message || '');
-        const m1 = msg.match(/Could not find the '([^']+)' column/i);
-        const m2 = msg.match(/column\s+stories\.([a-zA-Z0-9_]+)\s+does\s+not\s+exist/i);
-        const missing = (m1?.[1] || m2?.[1] || '').trim();
-        if (missing && Object.prototype.hasOwnProperty.call(current, missing)) {
-          const next: any = { ...current };
-          delete next[missing];
-          current = next;
-          continue;
-        }
-        break;
-      }
-      if (!saved) throw lastError || new Error('save failed');
+      // 缺列重试的那套逻辑收在 writeStoryRow 里（导入路径也用同一份）。
+      const saved = await writeStoryRow(payload);
+      if (!saved.ok) throw saved.error || new Error('save failed');
 
       showToast(
         postStatus === 'published' ? "连载已发布上线" : postStatus === 'scheduled' ? "已排入定时队列" : "草稿已保存",
@@ -464,35 +539,37 @@ function PublisherStudioContent() {
 
       </main>
 
-      {/* 🚀 批量导入弹窗 (加固版) */}
-      {showImportModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-          <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-            <div className="p-6 border-b flex justify-between items-center bg-slate-50">
-              <h3 className="text-xs font-black uppercase tracking-widest text-slate-900">导入多章节连载 JSON</h3>
-              <button onClick={() => setShowImportModal(false)} className="text-slate-400 hover:text-slate-900"><X size={20}/></button>
-            </div>
-            <div className="p-6 bg-slate-100">
-              <textarea 
-                className="w-full h-80 bg-slate-900 text-emerald-400 p-6 rounded-2xl font-mono text-[11px] outline-none resize-none leading-relaxed" 
-                value={importJsonText} 
-                onChange={(e) => setImportJsonText(e.target.value)} 
-                placeholder="在此粘贴 JSON 数组..." 
+      {/* 🚀 导入弹窗：智能分章（整篇 → 当前作品的 N 章）+ 旧的 JSON 批量 */}
+      <StoryTextImport
+        open={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        existingCount={storyData.chapters?.length || 0}
+        onApply={applyImportedChapters}
+        jsonSlot={
+          <div className="space-y-4">
+            <p className="text-[10px] font-bold text-slate-500 leading-relaxed">
+              一份 JSON 数组可一次建【多部独立作品】，正文取每部作品的 chapters[0]。
+              只想把一篇长文切成多章，请用左边的「智能分章」。
+            </p>
+            <textarea
+                className="w-full h-64 bg-slate-900 text-emerald-400 p-6 rounded-2xl font-mono text-[11px] outline-none resize-none leading-relaxed"
+                value={importJsonText}
+                onChange={(e) => setImportJsonText(e.target.value)}
+                placeholder="在此粘贴 JSON 数组..."
               />
-            </div>
-            <div className="p-6 border-t flex justify-end gap-3 bg-white text-right">
-              <button onClick={() => setShowImportModal(false)} className="px-6 py-3 text-[10px] font-black uppercase text-slate-500 hover:bg-slate-50 rounded-xl transition-all">取消</button>
-              <button 
-                onClick={handleTextImport} 
-                disabled={isImporting || !importJsonText.trim()} 
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setShowImportModal(false)} className="px-6 py-3 text-[10px] font-black uppercase text-slate-500 hover:bg-white rounded-xl transition-all">取消</button>
+              <button
+                onClick={handleTextImport}
+                disabled={isImporting || !importJsonText.trim()}
                 className="bg-blue-600 text-white px-10 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-xl disabled:opacity-50"
               >
                 {isImporting ? "正在入库..." : "确认批量导入"}
               </button>
             </div>
           </div>
-        </div>
-      )}
+        }
+      />
 
     </div>
   );
