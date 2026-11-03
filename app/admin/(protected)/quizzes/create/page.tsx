@@ -257,7 +257,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
           toast.type === 'success' ? 'bg-slate-900 text-white' : 'bg-rose-500 text-white'
         }`}>
           {toast.type === 'success' ? <CheckCircle2 size={18} className="text-emerald-400" /> : <AlertCircle size={18} />}
-          <span className="text-[11px] font-black uppercase tracking-widest">{toast.msg}</span>
+          <span className="text-[11px] font-black tracking-widest">{toast.msg}</span>
         </div>
       )}
 
@@ -272,16 +272,16 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         </div>
         <nav className="flex bg-slate-100 p-1 rounded-2xl">
           {[{id:'content',label:'Content'},{id:'results',label:'Results'},{id:'logic',label:'Logic'}].map(t => (
-            <button key={t.id} onClick={()=>setActiveTab(t.id)} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === t.id ? 'bg-white shadow-sm text-slate-900' : 'text-slate-400'}`}>
+            <button key={t.id} onClick={()=>setActiveTab(t.id)} className={`px-6 py-2 rounded-xl text-[10px] font-black tracking-widest transition-all ${activeTab === t.id ? 'bg-white shadow-sm text-slate-900' : 'text-slate-400'}`}>
               {t.label}
             </button>
           ))}
         </nav>
         <div className="flex items-center gap-3">
-           <button onClick={() => setShowImportModal(true)} className="bg-white border border-slate-200 text-slate-600 px-6 py-3 rounded-2xl text-[10px] font-black uppercase flex items-center gap-2 shadow-sm hover:bg-slate-50 transition-all">
+           <button onClick={() => setShowImportModal(true)} className="bg-white border border-slate-200 text-slate-600 px-6 py-3 rounded-2xl text-[10px] font-black flex items-center gap-2 shadow-sm hover:bg-slate-50 transition-all">
              <UploadCloud size={14} /> Batch Import
            </button>
-           <button onClick={handlePublish} disabled={isSaving} className="bg-slate-900 text-white px-10 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 hover:bg-black transition-all shadow-xl">
+           <button onClick={handlePublish} disabled={isSaving} className="bg-slate-900 text-white px-10 py-3 rounded-2xl text-[10px] font-black tracking-widest flex items-center gap-2 hover:bg-black transition-all shadow-xl">
              {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}{' '}
              {postStatus === 'published' ? 'Publish Live' : postStatus === 'scheduled' ? 'Schedule' : 'Save Draft'}
            </button>
@@ -291,15 +291,15 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       <main className="flex-1 flex overflow-hidden">
         {/* 左侧题目大纲 */}
         <aside className="w-72 bg-white border-r border-slate-200 flex flex-col shrink-0">
-          <div className="p-6 border-b border-slate-50 text-[10px] font-black uppercase text-slate-400 tracking-widest">Outline</div>
+          <div className="p-6 border-b border-slate-50 text-[10px] font-black text-slate-400 tracking-widest">Outline</div>
           <div className="flex-1 overflow-y-auto p-4 space-y-2 no-scrollbar">
             {quizData.questions.map((q, i) => (
               <button key={q.id} onClick={() => { setActiveTab('content'); setCurrentQuestionIndex(i); }} className={`w-full text-left p-4 rounded-2xl transition-all ${currentQuestionIndex === i && activeTab === 'content' ? 'bg-slate-900 text-white shadow-lg' : 'hover:bg-slate-50 text-slate-500'}`}>
-                <div className="text-[9px] font-black opacity-30 mb-1 uppercase">Q{i+1}</div>
+                <div className="text-[9px] font-black opacity-30 mb-1">Q{i+1}</div>
                 <div className="text-xs font-bold line-clamp-1 italic">{q.title || "Untitled Question"}</div>
               </button>
             ))}
-            <button onClick={() => setQuizData({...quizData, questions: [...quizData.questions, { id: `q${Date.now()}`, title: "", weight: 1.0, options: [] }]})} className="w-full py-4 border-2 border-dashed border-slate-100 rounded-2xl text-[10px] font-black text-slate-300 uppercase hover:text-slate-900 transition-all">+ New Question</button>
+            <button onClick={() => setQuizData({...quizData, questions: [...quizData.questions, { id: `q${Date.now()}`, title: "", weight: 1.0, options: [] }]})} className="w-full py-4 border-2 border-dashed border-slate-100 rounded-2xl text-[10px] font-black text-slate-300 hover:text-slate-900 transition-all">+ New Question</button>
           </div>
         </aside>
 
@@ -312,7 +312,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
                   const n = [...quizData.questions]; n[currentQuestionIndex].title = e.target.value; setQuizData({...quizData, questions: n});
                 }} placeholder="What's the question?" />
                 <div className="space-y-4">
-                  <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Options & Scores</p>
+                  <p className="text-[10px] font-black text-slate-300 tracking-widest">Options & Scores</p>
                   {quizData.questions[currentQuestionIndex]?.options.map((opt, oIdx) => (
                     <div key={opt.id} className="flex gap-3 group">
                       <input className="flex-1 bg-slate-50 border rounded-2xl px-6 py-4 text-sm font-bold outline-none focus:bg-white transition-all" value={opt.text} onChange={(e)=>{
@@ -326,7 +326,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
                       <button onClick={() => { const n = [...quizData.questions]; n[currentQuestionIndex].options.splice(oIdx, 1); setQuizData({...quizData, questions: n}); }} className="p-2 text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={18}/></button>
                     </div>
                   ))}
-                  <button onClick={() => { const n = [...quizData.questions]; n[currentQuestionIndex].options.push({ id: `o${Date.now()}`, text: "", score: 0, tag: "" }); setQuizData({...quizData, questions: n}); }} className="w-full py-4 border-2 border-dashed border-slate-100 rounded-2xl text-[10px] font-black text-slate-300 uppercase hover:text-slate-900 transition-all">+ Add Option</button>
+                  <button onClick={() => { const n = [...quizData.questions]; n[currentQuestionIndex].options.push({ id: `o${Date.now()}`, text: "", score: 0, tag: "" }); setQuizData({...quizData, questions: n}); }} className="w-full py-4 border-2 border-dashed border-slate-100 rounded-2xl text-[10px] font-black text-slate-300 hover:text-slate-900 transition-all">+ Add Option</button>
                 </div>
               </div>
             )}
@@ -334,13 +334,13 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
             {activeTab === 'results' && (
               <div className="space-y-8 animate-in fade-in">
                 <div className="flex justify-between items-center pb-6 border-b border-slate-100">
-                  <h3 className="text-2xl font-black italic uppercase tracking-tighter flex items-center gap-2"><Sparkles className="text-orange-500"/> Result Mapping</h3>
-                  <button onClick={() => setQuizData({...quizData, results: [...quizData.results, { id: `r${Date.now()}`, min_score: 0, max_score: 10, title: "", description: "" }]})} className="bg-slate-900 text-white px-8 py-3 rounded-2xl text-[10px] font-black uppercase shadow-lg">+ New Result</button>
+                  <h3 className="text-2xl font-black italic tracking-tighter flex items-center gap-2"><Sparkles className="text-orange-500"/> Result Mapping</h3>
+                  <button onClick={() => setQuizData({...quizData, results: [...quizData.results, { id: `r${Date.now()}`, min_score: 0, max_score: 10, title: "", description: "" }]})} className="bg-slate-900 text-white px-8 py-3 rounded-2xl text-[10px] font-black shadow-lg">+ New Result</button>
                 </div>
                 {quizData.results.map((res, rIdx) => (
                   <div key={res.id} className="bg-white rounded-[40px] border border-slate-200 p-8 flex gap-8 relative shadow-sm aura-hover-lift">
                     <div className="w-40 space-y-3 shrink-0">
-                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Range</label>
+                       <label className="text-[10px] font-black text-slate-400 tracking-widest">Range</label>
                        <div className="flex items-center gap-2 bg-slate-50 p-3 rounded-2xl shadow-inner border border-slate-100">
                           <input type="number" className="bg-transparent w-full text-center font-bold text-xs outline-none" value={res.min_score} onChange={(e)=>{
                              const n = [...quizData.results]; n[rIdx].min_score = parseInt(e.target.value) || 0; setQuizData({...quizData, results: n});
@@ -370,7 +370,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
                 {SCORING_MODELS.map(m => (
                   <button key={m.id} onClick={() => setQuizData({...quizData, model: m.id})} className={`p-12 rounded-[48px] border-2 transition-all text-left space-y-6 ${quizData.model === m.id ? 'bg-white border-slate-900 shadow-2xl scale-105' : 'bg-white border-transparent opacity-50'}`}>
                     <div className={`p-5 rounded-2xl w-fit ${quizData.model === m.id ? 'bg-slate-900 text-white shadow-xl' : 'bg-slate-100 text-slate-400'}`}>{m.icon}</div>
-                    <div><p className="text-xl font-black italic uppercase mb-2 text-slate-900">{m.name}</p><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{m.desc}</p></div>
+                    <div><p className="text-xl font-black italic mb-2 text-slate-900">{m.name}</p><p className="text-[10px] text-slate-400 font-bold tracking-widest">{m.desc}</p></div>
                   </button>
                 ))}
               </div>
@@ -382,7 +382,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         <aside className="w-80 bg-white border-l border-slate-200 p-8 flex flex-col gap-10 shrink-0 overflow-y-auto no-scrollbar">
           {/* 🚀 发布策略（与 BRIEFS 后台同一套交互） */}
           <div className="p-6 rounded-[32px] bg-slate-50 border border-slate-100 space-y-4">
-            <span className="text-[10px] font-black uppercase text-slate-900 tracking-widest flex items-center gap-2">
+            <span className="text-[10px] font-black text-slate-900 tracking-widest flex items-center gap-2">
               <Clock size={14} className="text-blue-500"/> 发布策略
             </span>
 
@@ -392,7 +392,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
                   key={st}
                   type="button"
                   onClick={() => setPostStatus(st)}
-                  className={`py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${postStatus === st ? 'bg-slate-900 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}
+                  className={`py-2.5 rounded-xl text-[9px] font-black transition-all ${postStatus === st ? 'bg-slate-900 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}
                 >
                   {st === 'draft' ? '草稿' : st === 'published' ? '发布' : '定时'}
                 </button>
@@ -401,7 +401,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
 
             {postStatus === 'scheduled' && (
               <div className="space-y-2 p-4 bg-indigo-50/50 rounded-2xl border border-indigo-50">
-                <label className="text-[9px] font-black uppercase tracking-widest text-indigo-500 block">上线时间</label>
+                <label className="text-[9px] font-black tracking-widest text-indigo-500 block">上线时间</label>
                 <input
                   type="datetime-local"
                   value={scheduledAt}
@@ -415,7 +415,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
             )}
 
             <div className="flex items-center justify-between p-4 rounded-2xl bg-white border border-slate-100">
-              <span className="text-[10px] font-black uppercase text-slate-900 tracking-widest flex items-center gap-2">
+              <span className="text-[10px] font-black text-slate-900 tracking-widest flex items-center gap-2">
                 <Star size={14} className={isFeatured ? 'text-amber-500' : 'text-slate-300'} fill={isFeatured ? 'currentColor' : 'none'} /> 主推 / Banner
               </span>
               <button
@@ -429,7 +429,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
 
             {isFeatured && (
               <div className="flex items-center gap-3 p-4 rounded-2xl bg-white border border-slate-100">
-                <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest shrink-0">排序</span>
+                <span className="text-[9px] font-black text-slate-400 tracking-widest shrink-0">排序</span>
                 <input
                   type="number"
                   value={featuredOrder}
@@ -444,7 +444,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
           {/* 限时模式 */}
           <div className="p-6 rounded-[32px] bg-slate-50 border border-slate-100 space-y-4">
              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase text-slate-900 tracking-widest flex items-center gap-2"><Timer size={14} className="text-rose-500"/> Limited Mode</span>
+                <span className="text-[10px] font-black text-slate-900 tracking-widest flex items-center gap-2"><Timer size={14} className="text-rose-500"/> Limited Mode</span>
                 <button onClick={() => setQuizData(prev => ({...prev, is_limited: !prev.is_limited}))} className={`w-10 h-5 rounded-full transition-all relative ${quizData.is_limited ? 'bg-rose-500' : 'bg-slate-300'}`}>
                   <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${quizData.is_limited ? 'left-6' : 'left-1'}`} />
                 </button>
@@ -455,7 +455,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
           {/* 分类管理 (恢复) */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest flex items-center gap-2"><Folder size={14}/> Categories</span>
+              <span className="text-[10px] font-black text-slate-400 tracking-widest flex items-center gap-2"><Folder size={14}/> Categories</span>
               <button onClick={() => setIsEditingCategories(!isEditingCategories)} className="p-2 text-slate-400 hover:text-slate-900 transition-all">{isEditingCategories ? <Check size={14}/> : <Edit3 size={14}/>}</button>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -480,7 +480,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
 
           {/* 标签管理 */}
           <div className="space-y-4">
-            <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest block">Operational Tags</span>
+            <span className="text-[10px] font-black text-slate-400 tracking-widest block">Operational Tags</span>
             <div className="flex flex-wrap gap-2">
               {AVAILABLE_TAGS.map(tag => (
                 <button key={tag.id} onClick={() => setQuizData(prev => ({...prev, tags: prev.tags.includes(tag.id) ? prev.tags.filter(t => t !== tag.id) : [...prev.tags, tag.id]}))} className={`px-4 py-2 rounded-xl text-[10px] font-bold border transition-all ${quizData.tags.includes(tag.id) ? `${tag.color} scale-105 shadow-sm` : 'bg-white border-slate-100 text-slate-500 hover:border-slate-300'}`}>{tag.icon} {tag.label}</button>
@@ -490,20 +490,20 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
 
           {/* 封面上传 (WebP 实时反馈) */}
           <div className="space-y-4">
-            <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest block">Cover Vision</span>
+            <span className="text-[10px] font-black text-slate-400 tracking-widest block">Cover Vision</span>
             <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
             <div onClick={() => !isUploading && fileInputRef.current?.click()} className={`relative aspect-video rounded-[36px] border-2 border-dashed flex items-center justify-center overflow-hidden cursor-pointer group transition-all ${quizData.cover_url ? 'border-transparent shadow-2xl' : 'bg-slate-50 border-slate-100 hover:border-slate-900'}`}>
               {isUploading ? (
                 <div className="flex flex-col items-center gap-2">
                   <Loader2 className="animate-spin text-slate-400" />
-                  <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Optimizing WebP...</span>
+                  <span className="text-[8px] font-black text-slate-400 tracking-widest">Optimizing WebP...</span>
                 </div>
               ) : quizData.cover_url ? (
                 <>
                   <img src={quizData.cover_url} className="w-full h-full object-cover" />
-                  {quizData.is_limited && <div className="absolute top-4 right-4 bg-rose-500 text-white px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-tighter animate-pulse shadow-lg flex items-center gap-1"><Zap size={10} fill="currentColor"/> Limited</div>}
+                  {quizData.is_limited && <div className="absolute top-4 right-4 bg-rose-500 text-white px-3 py-1 rounded-full text-[8px] font-black tracking-tighter animate-pulse shadow-lg flex items-center gap-1"><Zap size={10} fill="currentColor"/> Limited</div>}
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center">
-                    <span className="text-white text-[9px] font-black uppercase tracking-[0.3em]">Update Media</span>
+                    <span className="text-white text-[9px] font-black tracking-[0.3em]">Update Media</span>
                   </div>
                 </>
               ) : <UploadCloud className="text-slate-300" />}
@@ -529,7 +529,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
 
 export default function QuizStudioWrapper() {
   return (
-    <Suspense fallback={<div className="h-screen flex items-center justify-center bg-[#F8F9FB] font-black italic text-slate-300 animate-pulse uppercase tracking-widest">Aura Loading...</div>}>
+    <Suspense fallback={<div className="h-screen flex items-center justify-center bg-[#F8F9FB] font-black italic text-slate-300 animate-pulse tracking-widest">Aura Loading...</div>}>
       <QuizEditorContent />
     </Suspense>
   );

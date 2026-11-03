@@ -14,10 +14,10 @@ export default function DashboardPage() {
   return (
     <div className="p-10 space-y-10 animate-in fade-in duration-700">
       <header>
-        <h1 className="text-3xl font-black italic tracking-tighter text-slate-900 uppercase">
+        <h1 className="text-3xl font-black italic tracking-tighter text-slate-900">
           Command Center <span className="text-cyan-500">.</span>
         </h1>
-        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Operational Intelligence Overview</p>
+        <p className="text-[10px] text-slate-400 font-bold tracking-widest mt-1">Operational Intelligence Overview</p>
       </header>
 
       {/* 数据卡片网格 */}
@@ -33,7 +33,7 @@ export default function DashboardPage() {
               </span>
             </div>
             <div className="space-y-1">
-              <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">{stat.title}</p>
+              <p className="text-[10px] font-black text-slate-300 tracking-widest">{stat.title}</p>
               <h3 className="text-3xl font-black text-slate-900 tracking-tighter">{stat.value}</h3>
             </div>
           </div>

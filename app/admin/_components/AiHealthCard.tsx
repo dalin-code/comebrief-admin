@@ -143,7 +143,7 @@ export default function AiHealthCard() {
         onClick={toggle}
         className="w-full px-8 py-6 flex items-center justify-between gap-3 hover:bg-slate-50/60 transition-colors"
       >
-        <span className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-400 italic flex items-center gap-2">
+        <span className="text-[10px] font-black tracking-[0.4em] text-slate-400 italic flex items-center gap-2">
           <Stethoscope size={14} /> AI 自检 (Health)
         </span>
         <span className="flex items-center gap-2">
@@ -168,7 +168,7 @@ export default function AiHealthCard() {
               type="button"
               onClick={() => load(false)}
               disabled={loading || probing}
-              className="flex-1 h-10 rounded-2xl bg-slate-900 text-white font-black text-[9px] uppercase tracking-widest disabled:opacity-40 flex items-center justify-center gap-2"
+              className="flex-1 h-10 rounded-2xl bg-slate-900 text-white font-black text-[9px] tracking-widest disabled:opacity-40 flex items-center justify-center gap-2"
             >
               {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} 只查配置
             </button>
@@ -177,7 +177,7 @@ export default function AiHealthCard() {
               onClick={() => load(true)}
               disabled={loading || probing}
               title="真的去问一遍每个模型（会消耗一点点额度）"
-              className="flex-1 h-10 rounded-2xl border border-slate-200 text-slate-600 font-black text-[9px] uppercase tracking-widest disabled:opacity-40 flex items-center justify-center gap-2 hover:bg-slate-50"
+              className="flex-1 h-10 rounded-2xl border border-slate-200 text-slate-600 font-black text-[9px] tracking-widest disabled:opacity-40 flex items-center justify-center gap-2 hover:bg-slate-50"
             >
               {probing ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />} 真调一次
             </button>
@@ -201,7 +201,7 @@ function StatusBody({ data }: { data: StatusData }) {
       </p>
 
       <div className="space-y-2">
-        <p className="text-[8px] font-black uppercase tracking-widest text-slate-400">任务 → 模型</p>
+        <p className="text-[8px] font-black tracking-widest text-slate-400">任务 → 模型</p>
         {data.routing.map((row) => (
           <div key={row.task} className="flex items-start justify-between gap-3 text-[10px] leading-relaxed">
             <span className="font-black text-slate-500 shrink-0">{TASK_LABEL[row.task] || row.task}</span>
@@ -221,7 +221,7 @@ function StatusBody({ data }: { data: StatusData }) {
       </div>
 
       <div className="space-y-2">
-        <p className="text-[8px] font-black uppercase tracking-widest text-slate-400">兜底链 (AI_MODEL_FALLBACK)</p>
+        <p className="text-[8px] font-black tracking-widest text-slate-400">兜底链 (AI_MODEL_FALLBACK)</p>
         {data.fallback.length === 0 ? (
           <p className="text-[10px] font-bold text-amber-500 leading-relaxed">
             没配。主模型一挂就没退路 —— 建议配一个「不同供应商」的模型，也可以逗号分隔配一串。
@@ -250,7 +250,7 @@ function StatusBody({ data }: { data: StatusData }) {
       */}
       {data.mt ? (
         <div className="space-y-2">
-          <p className="text-[8px] font-black uppercase tracking-widest text-slate-400">
+          <p className="text-[8px] font-black tracking-widest text-slate-400">
             翻译兜底 · 传统 MT (AI_TRANSLATE_MT_FALLBACK)
           </p>
           <p className={`text-[10px] font-bold leading-relaxed p-3 rounded-2xl border ${LEVEL_STYLE[data.mt.summary.level] || LEVEL_STYLE.info}`}>
@@ -298,7 +298,7 @@ function StatusBody({ data }: { data: StatusData }) {
 
       {data.probe.length > 0 ? (
         <div className="space-y-2">
-          <p className="text-[8px] font-black uppercase tracking-widest text-slate-400">真调结果</p>
+          <p className="text-[8px] font-black tracking-widest text-slate-400">真调结果</p>
           {data.probe.map((p) => (
             <div key={p.spec} className="text-[10px] leading-relaxed">
               <span className="font-bold text-slate-800 break-all">{p.spec}</span>
@@ -317,7 +317,7 @@ function StatusBody({ data }: { data: StatusData }) {
       ) : null}
 
       <div className="space-y-1">
-        <p className="text-[8px] font-black uppercase tracking-widest text-slate-400">环境变量</p>
+        <p className="text-[8px] font-black tracking-widest text-slate-400">环境变量</p>
         {Object.entries(data.env).map(([k, v]) => (
           <div key={k} className="flex items-start justify-between gap-3 text-[9px] leading-relaxed">
             <span className="font-black text-slate-400 shrink-0">{k}</span>

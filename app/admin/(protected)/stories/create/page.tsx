@@ -325,7 +325,7 @@ function PublisherStudioContent() {
       {toast && (
         <div className={`fixed top-8 left-1/2 -translate-x-1/2 z-[100] px-8 py-3 rounded-full shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-top-6 ${toast.type === 'success' ? 'bg-slate-900 text-white' : 'bg-rose-500 text-white'}`}>
           {toast.type === 'success' ? <CheckCircle2 size={16} className="text-emerald-400" /> : <AlertCircle size={16} />}
-          <span className="text-[11px] font-black uppercase tracking-widest text-white">{toast.msg}</span>
+          <span className="text-[11px] font-black tracking-widest text-white">{toast.msg}</span>
         </div>
       )}
 
@@ -334,14 +334,14 @@ function PublisherStudioContent() {
         <div className="flex items-center gap-6">
           <button onClick={() => router.back()} className="text-slate-400 p-2 hover:bg-slate-50 rounded-xl transition-all"><ChevronLeft size={20}/></button>
           <div className="flex bg-slate-100 p-1 rounded-2xl">
-            <button onClick={() => setStoryData({...storyData, type: 'story'})} className={`px-6 py-2.5 rounded-xl text-[11px] font-black uppercase flex items-center gap-2 transition-all ${storyData.type === 'story' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400'}`}><Type size={14} /> 故事</button>
-            <button onClick={() => setStoryData({...storyData, type: 'comic'})} className={`px-6 py-2.5 rounded-xl text-[11px] font-black uppercase flex items-center gap-2 transition-all ${storyData.type === 'comic' ? 'bg-white shadow-sm text-purple-600' : 'text-slate-400'}`}><LayoutPanelTop size={14} /> 漫画</button>
+            <button onClick={() => setStoryData({...storyData, type: 'story'})} className={`px-6 py-2.5 rounded-xl text-[11px] font-black flex items-center gap-2 transition-all ${storyData.type === 'story' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400'}`}><Type size={14} /> 故事</button>
+            <button onClick={() => setStoryData({...storyData, type: 'comic'})} className={`px-6 py-2.5 rounded-xl text-[11px] font-black flex items-center gap-2 transition-all ${storyData.type === 'comic' ? 'bg-white shadow-sm text-purple-600' : 'text-slate-400'}`}><LayoutPanelTop size={14} /> 漫画</button>
           </div>
         </div>
         <div className="flex items-center gap-4">
           <input className="bg-transparent text-lg font-black italic outline-none w-64 text-right mr-4 text-slate-900 border-b-2 border-transparent focus:border-slate-200" value={storyData.title} onChange={(e) => setStoryData({...storyData, title: e.target.value})} placeholder="输入作品标题..." />
-          <button onClick={() => setShowImportModal(true)} className="bg-white border border-slate-200 text-slate-600 px-6 py-3 rounded-2xl text-[10px] font-black uppercase flex items-center gap-2 shadow-sm hover:bg-slate-50 transition-all"><UploadCloud size={14} /> 导入</button>
-          <button onClick={handleFinalSave} disabled={isSaving} className="bg-slate-900 text-white px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-black shadow-xl flex items-center gap-2">
+          <button onClick={() => setShowImportModal(true)} className="bg-white border border-slate-200 text-slate-600 px-6 py-3 rounded-2xl text-[10px] font-black flex items-center gap-2 shadow-sm hover:bg-slate-50 transition-all"><UploadCloud size={14} /> 导入</button>
+          <button onClick={handleFinalSave} disabled={isSaving} className="bg-slate-900 text-white px-8 py-3 rounded-2xl text-[10px] font-black tracking-widest hover:bg-black shadow-xl flex items-center gap-2">
             {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}{' '}
             {postStatus === 'published' ? '发布' : postStatus === 'scheduled' ? '定时发布' : '存草稿'}
           </button>
@@ -352,14 +352,14 @@ function PublisherStudioContent() {
         {/* 左侧：连载目录 (带删除逻辑) */}
         <aside className="w-80 bg-white border-r border-slate-200 flex flex-col shrink-0 z-10">
           <div className="p-6 border-b flex justify-between items-center bg-slate-50/50">
-             <div className="flex items-center gap-2 text-slate-400 font-black uppercase text-[10px] tracking-widest"><Menu size={14}/> 连载目录</div>
+             <div className="flex items-center gap-2 text-slate-400 font-black text-[10px] tracking-widest"><Menu size={14}/> 连载目录</div>
              <button onClick={addChapter} className="text-blue-600 hover:scale-110 transition-transform"><Plus size={18}/></button>
           </div>
           <div className="flex-1 overflow-y-auto p-4 space-y-2 no-scrollbar">
              {storyData.chapters?.map((ch: any, idx: number) => (
                <div key={ch.id} className="relative group">
                  <button onClick={() => setCurrentChapterIndex(idx)} className={`w-full text-left p-5 rounded-[24px] border transition-all flex flex-col gap-2 ${currentChapterIndex === idx ? 'bg-slate-900 border-slate-900 text-white shadow-lg' : 'bg-white border-slate-100 text-slate-600 hover:bg-slate-50'}`}>
-                   <div className="flex justify-between items-center w-full"><span className={`text-[9px] font-black uppercase ${currentChapterIndex === idx ? 'text-slate-400' : 'text-slate-400'}`}>{idx + 1} - Chapter</span>{ch.is_free ? <Unlock size={12} className="text-emerald-400" /> : <Lock size={12} className="text-orange-400" />}</div>
+                   <div className="flex justify-between items-center w-full"><span className={`text-[9px] font-black ${currentChapterIndex === idx ? 'text-slate-400' : 'text-slate-400'}`}>{idx + 1} - Chapter</span>{ch.is_free ? <Unlock size={12} className="text-emerald-400" /> : <Lock size={12} className="text-orange-400" />}</div>
                    <p className="text-xs font-bold italic line-clamp-1">{ch.title || "未命名章节"}</p>
                  </button>
                  {storyData.chapters.length > 1 && (
@@ -377,7 +377,7 @@ function PublisherStudioContent() {
               {/* 🚀 发布策略 */}
               <div className="bg-white rounded-[32px] p-8 border border-slate-200 shadow-sm space-y-6">
                  <div className="flex items-center justify-between flex-wrap gap-4">
-                    <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-400 italic flex items-center gap-2 text-left">
+                    <h3 className="text-[10px] font-black tracking-[0.4em] text-slate-400 italic flex items-center gap-2 text-left">
                        <Clock size={14}/> 发布策略
                     </h3>
                     <div className="grid grid-cols-3 gap-1.5 p-1.5 bg-slate-50 rounded-2xl border border-slate-100">
@@ -386,7 +386,7 @@ function PublisherStudioContent() {
                              key={st}
                              type="button"
                              onClick={() => setPostStatus(st)}
-                             className={`px-6 py-2.5 rounded-xl text-[9px] font-black uppercase transition-all ${postStatus === st ? 'bg-slate-900 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}
+                             className={`px-6 py-2.5 rounded-xl text-[9px] font-black transition-all ${postStatus === st ? 'bg-slate-900 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}
                           >
                              {st === 'draft' ? '草稿' : st === 'published' ? '发布' : '定时'}
                           </button>
@@ -396,7 +396,7 @@ function PublisherStudioContent() {
 
                  {postStatus === 'scheduled' && (
                     <div className="space-y-2 p-5 bg-indigo-50/40 rounded-3xl border border-indigo-50 max-w-sm text-left">
-                       <label className="text-[8px] font-black uppercase tracking-widest text-indigo-500 block ml-1">上线时间</label>
+                       <label className="text-[8px] font-black tracking-widest text-indigo-500 block ml-1">上线时间</label>
                        <input
                           type="datetime-local"
                           value={scheduledAt}
@@ -411,13 +411,13 @@ function PublisherStudioContent() {
                     <button
                        type="button"
                        onClick={() => setIsFeatured(v => !v)}
-                       className={`flex items-center gap-3 px-5 py-3 rounded-2xl border text-[10px] font-black uppercase tracking-widest transition-all ${isFeatured ? 'bg-amber-50 border-amber-200 text-amber-600' : 'bg-slate-50 border-transparent text-slate-400 hover:bg-slate-100'}`}
+                       className={`flex items-center gap-3 px-5 py-3 rounded-2xl border text-[10px] font-black tracking-widest transition-all ${isFeatured ? 'bg-amber-50 border-amber-200 text-amber-600' : 'bg-slate-50 border-transparent text-slate-400 hover:bg-slate-100'}`}
                     >
                        <Star size={14} fill={isFeatured ? 'currentColor' : 'none'} /> 主推 / Banner
                     </button>
                     {isFeatured && (
                        <div className="flex items-center gap-3">
-                          <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">排序</span>
+                          <span className="text-[9px] font-black text-slate-400 tracking-widest">排序</span>
                           <input
                              type="number"
                              value={featuredOrder}
@@ -431,7 +431,7 @@ function PublisherStudioContent() {
               </div>
               
               <div className="bg-white rounded-[32px] p-8 border border-slate-200 shadow-sm flex flex-col space-y-4">
-                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">本章标题</label>
+                 <label className="text-[10px] font-black text-slate-400 tracking-widest text-left">本章标题</label>
                  <input 
                     className="w-full bg-transparent text-3xl font-black italic outline-none text-slate-900 text-left"
                     value={activeChapter?.title || ""}
@@ -447,7 +447,7 @@ function PublisherStudioContent() {
                 <div className="bg-white rounded-[40px] border border-slate-200 overflow-hidden shadow-sm h-[600px] flex flex-col">
                    <div className="p-4 border-b border-slate-100 bg-slate-50 flex items-center gap-4 text-slate-400">
                       <BookOpen size={16} />
-                      <span className="text-[10px] font-black uppercase tracking-widest">正文内容</span>
+                      <span className="text-[10px] font-black tracking-widest">正文内容</span>
                    </div>
                    <textarea 
                       className="flex-1 p-10 bg-transparent text-lg text-slate-800 leading-loose outline-none resize-none font-serif text-left"
@@ -462,11 +462,11 @@ function PublisherStudioContent() {
               ) : (
                 <div className="bg-white rounded-[40px] border border-slate-200 p-8 shadow-sm space-y-8 text-left">
                    <div className="flex items-center justify-between border-b pb-4">
-                      <div className="flex items-center gap-3 text-slate-400 font-black uppercase text-[10px]">
+                      <div className="flex items-center gap-3 text-slate-400 font-black text-[10px]">
                         <ImageIcon size={18} /> Comic Pages ({activeChapter?.comic_pages?.length || 0})
                       </div>
                       <input type="file" multiple accept="image/*" className="hidden" ref={comicUploadRef} onChange={(e) => handleUpload(e, 'comic')} />
-                      <button onClick={() => comicUploadRef.current?.click()} className="bg-purple-50 text-purple-600 px-6 py-2.5 rounded-xl text-[10px] font-black uppercase hover:bg-purple-100 transition-all">+ 添加图片</button>
+                      <button onClick={() => comicUploadRef.current?.click()} className="bg-purple-50 text-purple-600 px-6 py-2.5 rounded-xl text-[10px] font-black hover:bg-purple-100 transition-all">+ 添加图片</button>
                    </div>
                    <div className="flex flex-col gap-6 max-w-2xl mx-auto">
                       {activeChapter?.comic_pages?.map((img: string, i: number) => (
@@ -493,10 +493,10 @@ function PublisherStudioContent() {
         {/* 右侧：变现与封面设置 (1:1 UI 复原) */}
         <aside className="w-80 bg-white border-l border-slate-200 p-8 flex flex-col gap-10 overflow-y-auto shrink-0 z-10 text-left">
            <div className="space-y-6">
-              <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest flex items-center gap-2"><Coins size={14}/> 章节变现</span>
+              <span className="text-[10px] font-black text-slate-400 tracking-widest flex items-center gap-2"><Coins size={14}/> 章节变现</span>
               <div className={`rounded-[32px] p-6 border transition-all ${activeChapter?.is_free ? 'bg-slate-50 border-slate-100' : 'bg-orange-50 border-orange-200'}`}>
                  <div className="flex items-center justify-between mb-4">
-                    <span className={`text-[10px] font-black uppercase ${activeChapter?.is_free ? 'text-slate-500' : 'text-orange-600'}`}>
+                    <span className={`text-[10px] font-black ${activeChapter?.is_free ? 'text-slate-500' : 'text-orange-600'}`}>
                       {activeChapter?.is_free ? '限免阅读' : '付费章节'}
                     </span>
                     <button 
@@ -512,7 +512,7 @@ function PublisherStudioContent() {
                  </div>
                  {!activeChapter?.is_free && (
                    <div className="space-y-3 pt-2 border-t border-orange-200/50">
-                      <label className="text-[9px] font-black text-orange-600/70 uppercase">售价 (AURA)</label>
+                      <label className="text-[9px] font-black text-orange-600/70">售价 (AURA)</label>
                       <div className="flex items-center gap-3 bg-white px-4 py-3 rounded-xl border border-orange-200 shadow-sm">
                           <Coins size={14} className="text-orange-500" />
                           <input className="bg-transparent font-black text-xs outline-none w-full" type="number" value={activeChapter?.price || 0} onChange={(e)=> {const n={...storyData}; n.chapters[currentChapterIndex].price = parseInt(e.target.value)||0; setStoryData(n);}} />
@@ -523,7 +523,7 @@ function PublisherStudioContent() {
            </div>
 
            <div className="space-y-6">
-              <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest block">作品封面</span>
+              <span className="text-[10px] font-black text-slate-400 tracking-widest block">作品封面</span>
               <input type="file" className="hidden" ref={fileInputRef} onChange={(e) => handleUpload(e, 'cover')} accept="image/*" />
               <div onClick={() => !isUploading && fileInputRef.current?.click()} className="relative aspect-[3/4] rounded-[32px] bg-slate-50 border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden cursor-pointer hover:bg-slate-100 transition-all">
                 {isUploading ? (
@@ -531,7 +531,7 @@ function PublisherStudioContent() {
                 ) : storyData.cover_url ? (
                   <img src={storyData.cover_url} className="w-full h-full object-cover" />
                 ) : (
-                  <div className="text-center"><UploadCloud size={32} className="mx-auto text-slate-200 mb-2" /><p className="text-[9px] font-black text-slate-500 uppercase">设置主封面</p></div>
+                  <div className="text-center"><UploadCloud size={32} className="mx-auto text-slate-200 mb-2" /><p className="text-[9px] font-black text-slate-500">设置主封面</p></div>
                 )}
               </div>
            </div>
@@ -558,11 +558,11 @@ function PublisherStudioContent() {
                 placeholder="在此粘贴 JSON 数组..."
               />
             <div className="flex justify-end gap-3">
-              <button onClick={() => setShowImportModal(false)} className="px-6 py-3 text-[10px] font-black uppercase text-slate-500 hover:bg-white rounded-xl transition-all">取消</button>
+              <button onClick={() => setShowImportModal(false)} className="px-6 py-3 text-[10px] font-black text-slate-500 hover:bg-white rounded-xl transition-all">取消</button>
               <button
                 onClick={handleTextImport}
                 disabled={isImporting || !importJsonText.trim()}
-                className="bg-blue-600 text-white px-10 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-xl disabled:opacity-50"
+                className="bg-blue-600 text-white px-10 py-3 rounded-xl text-[10px] font-black tracking-widest shadow-xl disabled:opacity-50"
               >
                 {isImporting ? "正在入库..." : "确认批量导入"}
               </button>

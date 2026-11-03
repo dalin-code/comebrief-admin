@@ -59,7 +59,7 @@ function AdminLoginContent() {
     <div className="flex min-h-screen items-center justify-center bg-slate-50 px-6 font-sans">
       <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
         <div className="mb-8">
-          <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Admin Control Panel</div>
+          <div className="text-xs font-bold tracking-wider text-slate-400">Admin Control Panel</div>
           <h1 className="mt-2 text-3xl font-semibold text-slate-900">登录</h1>
         </div>
 

@@ -48,7 +48,7 @@ export default function AdminLayout({
       <div className="flex h-screen w-full items-center justify-center bg-[#FBFBFC] font-sans">
         <div className="flex flex-col items-center gap-4">
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-slate-900" />
-          <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-400 italic animate-pulse">
+          <p className="text-[10px] font-black tracking-[0.3em] text-slate-400 italic animate-pulse">
             AURA SECURITY BOUNDARY SYNCING...
           </p>
         </div>

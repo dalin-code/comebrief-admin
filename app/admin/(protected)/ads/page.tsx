@@ -137,18 +137,18 @@ export default function AdsAdminV3_5() {
           toast.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
         }`}>
           {toast.type === 'success' ? <CheckCircle2 size={18} /> : <XCircle size={18} />}
-          <span className="text-xs font-black uppercase tracking-widest">{toast.msg}</span>
+          <span className="text-xs font-black tracking-widest">{toast.msg}</span>
         </div>
       )}
 
       {/* Header */}
       <div className="max-w-7xl mx-auto mb-10 flex flex-col md:flex-row md:items-end justify-between border-b border-slate-200 pb-8 gap-6">
         <div>
-          <h2 className="text-3xl font-black italic uppercase tracking-tighter">Pro Ad Matrix v3.5</h2>
-          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em] mt-2">WebP 自动化压缩上传系统已激活</p>
+          <h2 className="text-3xl font-black italic tracking-tighter">Pro Ad Matrix v3.5</h2>
+          <p className="text-[10px] text-slate-400 font-bold tracking-[0.2em] mt-2">WebP 自动化压缩上传系统已激活</p>
         </div>
         {saveStatus && (
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2">
+          <div className="text-xs font-bold tracking-widest text-slate-400 flex items-center gap-2">
             {saveStatus === 'saving' ? <Loader2 size={14} className="animate-spin text-blue-500" /> : <CheckCircle2 size={14} className="text-emerald-500" />}
             {saveStatus === 'saving' ? 'Syncing to DB...' : 'Saved to Supabase'}
           </div>
@@ -168,8 +168,8 @@ export default function AdsAdminV3_5() {
                 <div className="flex items-start gap-4 text-left">
                   <div className="w-12 h-12 bg-white border border-slate-100 rounded-xl flex items-center justify-center text-slate-400"><Layout size={20} /></div>
                   <div>
-                    <h3 className="text-lg font-black italic uppercase tracking-tighter text-left">{slot.name}</h3>
-                    <span className="text-[9px] font-black text-slate-300 uppercase tracking-widest">{slot.id} Slot</span>
+                    <h3 className="text-lg font-black italic tracking-tighter text-left">{slot.name}</h3>
+                    <span className="text-[9px] font-black text-slate-300 tracking-widest">{slot.id} Slot</span>
                   </div>
                 </div>
                 <button onClick={() => handleUpdate(slot.id, { active: !config.active })} className={`relative inline-flex h-6 w-12 items-center rounded-full transition-all ${config.active ? 'bg-emerald-500' : 'bg-slate-200'}`}>
@@ -180,7 +180,7 @@ export default function AdsAdminV3_5() {
               {/* 代码编辑区 */}
               <div className="p-8 grid grid-cols-1 lg:grid-cols-2 gap-10">
                  <div className="space-y-4">
-                    <label className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2"><Laptop size={14} className="text-blue-500" /> Desktop Ad Code</label>
+                    <label className="text-[10px] font-black tracking-widest flex items-center gap-2"><Laptop size={14} className="text-blue-500" /> Desktop Ad Code</label>
                     <textarea 
                       className="w-full h-32 bg-[#1E293B] rounded-2xl p-4 font-mono text-[10px] text-emerald-400 outline-none" 
                       defaultValue={config.ad_code || ""} 
@@ -189,7 +189,7 @@ export default function AdsAdminV3_5() {
                     />
                  </div>
                  <div className="space-y-4">
-                    <label className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2"><Smartphone size={14} className="text-pink-500" /> Mobile Ad Code</label>
+                    <label className="text-[10px] font-black tracking-widest flex items-center gap-2"><Smartphone size={14} className="text-pink-500" /> Mobile Ad Code</label>
                     <textarea 
                       className="w-full h-32 bg-[#1E293B] rounded-2xl p-4 font-mono text-[10px] text-pink-400 outline-none" 
                       defaultValue={config.mobile_ad_code || ""} 
@@ -203,10 +203,10 @@ export default function AdsAdminV3_5() {
               <div className="px-8 py-6 bg-slate-50 border-t border-slate-100 space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <span className="text-[10px] font-black uppercase text-slate-900 tracking-[0.2em]">Visual Fallback System</span>
+                    <span className="text-[10px] font-black text-slate-900 tracking-[0.2em]">Visual Fallback System</span>
                     <p className="text-[9px] text-slate-400 mt-1">推荐比例: {slot.ratio}</p>
                   </div>
-                  {isUploading && <span className="text-[10px] font-black text-blue-500 animate-pulse uppercase tracking-widest text-left">Auto-Converting to WebP...</span>}
+                  {isUploading && <span className="text-[10px] font-black text-blue-500 animate-pulse tracking-widest text-left">Auto-Converting to WebP...</span>}
                 </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

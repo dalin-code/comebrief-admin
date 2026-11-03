@@ -59,7 +59,7 @@ export function Sidebar() {
             <Link
               key={item.path}
               href={item.path}
-              className={`w-full flex items-center gap-3 px-5 py-4 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all ${
+              className={`w-full flex items-center gap-3 px-5 py-4 rounded-2xl text-[11px] font-black tracking-widest transition-all ${
                 isActive 
                   ? "bg-slate-950 text-white shadow-xl shadow-cyan-500/10 scale-[1.02]" 
                   : "text-slate-400 hover:bg-slate-50 hover:text-slate-600"
@@ -76,7 +76,7 @@ export function Sidebar() {
       <div className="p-8 border-t border-slate-50 space-y-3">
         {confirming ? (
           <div className="space-y-3">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+            <p className="text-[10px] font-black tracking-widest text-slate-400">
               确定退出登录？
             </p>
             <div className="flex gap-2">
@@ -84,7 +84,7 @@ export function Sidebar() {
                 type="button"
                 onClick={doSignOut}
                 disabled={busy}
-                className="flex-1 h-9 rounded-xl bg-rose-500 text-white text-[10px] font-black uppercase tracking-widest hover:bg-rose-600 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                className="flex-1 h-9 rounded-xl bg-rose-500 text-white text-[10px] font-black tracking-widest hover:bg-rose-600 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
               >
                 {busy ? <Loader2 size={12} className="animate-spin" /> : <LogOut size={12} />} 退出
               </button>
@@ -92,7 +92,7 @@ export function Sidebar() {
                 type="button"
                 onClick={() => { setConfirming(false); setError(""); }}
                 disabled={busy}
-                className="flex-1 h-9 rounded-xl border border-slate-200 text-slate-500 text-[10px] font-black uppercase tracking-widest hover:bg-slate-50 disabled:opacity-50 transition-all"
+                className="flex-1 h-9 rounded-xl border border-slate-200 text-slate-500 text-[10px] font-black tracking-widest hover:bg-slate-50 disabled:opacity-50 transition-all"
               >
                 取消
               </button>
@@ -102,7 +102,7 @@ export function Sidebar() {
           <button
             type="button"
             onClick={() => setConfirming(true)}
-            className="flex items-center gap-2 text-rose-400 text-[10px] font-black uppercase tracking-widest hover:text-rose-600 transition-all"
+            className="flex items-center gap-2 text-rose-400 text-[10px] font-black tracking-widest hover:text-rose-600 transition-all"
           >
             <LogOut size={14} /> 退出系统
           </button>

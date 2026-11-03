@@ -112,7 +112,7 @@ export default function IndexNowButton({
         onClick={push}
         disabled={busy}
         title="把 sitemap 里的全部页面地址一次性报给 Bing / Yandex（IndexNow 协议）"
-        className={`bg-white border border-slate-200 text-slate-700 font-black uppercase tracking-widest hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed ${className}`}
+        className={`bg-white border border-slate-200 text-slate-700 font-black tracking-widest hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed ${className}`}
       >
         {busy ? <Loader2 size={iconSize} className="animate-spin" /> : <Send size={iconSize} />}
         <span>{busy ? '推送中...' : 'IndexNow'}</span>

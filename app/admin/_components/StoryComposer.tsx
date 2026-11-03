@@ -1238,7 +1238,7 @@ export function StoryComposer({
             <h2 className="text-xl font-black italic tracking-tighter text-left flex items-center gap-2">
               <Sparkles size={18} className="text-indigo-500" /> AI 创作
             </h2>
-            <p className="text-[9px] font-black uppercase tracking-[0.3em] text-slate-400 mt-1.5 text-left">
+            <p className="text-[9px] font-black tracking-[0.3em] text-slate-400 mt-1.5 text-left">
               Story Composer · 生成中文短篇
             </p>
           </div>
@@ -1276,7 +1276,7 @@ export function StoryComposer({
           {/* 上一次实际用了什么 —— 只读记录；不回填成选中，避免随机结果变成默认 */}
           {lastResolved && (
             <div className="p-4 rounded-3xl bg-slate-50 border border-slate-100 text-left">
-              <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">
+              <p className="text-[9px] font-black tracking-widest text-slate-400">
                 上次实际用到 · 仅记录，不会自动选中
               </p>
               <p className="mt-1.5 text-[11px] font-bold text-slate-500 leading-relaxed">
@@ -1337,7 +1337,7 @@ export function StoryComposer({
           {skills.length > 0 && (
             <div className="space-y-2.5 pb-7 border-b border-slate-100">
               <div className="flex items-center justify-between px-1">
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left">
+                <label className="text-[10px] font-black tracking-widest text-slate-400 text-left">
                   <span className="text-slate-300 mr-1.5">笔法</span>
                   写法
                   <span className="ml-2 font-bold tracking-normal normal-case text-slate-300">
@@ -1413,7 +1413,7 @@ export function StoryComposer({
                   <Layers size={14} />
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-[10px] font-black uppercase tracking-widest text-slate-500">
+                  <span className="block text-[10px] font-black tracking-widest text-slate-500">
                     高级设置
                   </span>
                   <span className={`block text-[9px] font-bold mt-0.5 ${tagError ? 'text-rose-500' : 'text-slate-300'}`}>
@@ -1475,7 +1475,7 @@ export function StoryComposer({
               return (
                 <div key={dim.key} className="space-y-2.5">
                   <div className="flex items-center justify-between px-1">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left">
+                    <label className="text-[10px] font-black tracking-widest text-slate-400 text-left">
                       <span className="text-slate-300 mr-1.5">{dim.cn}</span>
                       {dim.label}
                       <span className="ml-2 font-bold tracking-normal normal-case text-slate-300">{dim.hint}</span>
@@ -1543,7 +1543,7 @@ export function StoryComposer({
 
           {/* 构思 —— 这一栏比任何标签都重要 */}
           <div className="space-y-2.5 pt-4 border-t border-slate-100">
-            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left block">
+            <label className="text-[10px] font-black tracking-widest text-slate-400 text-left block">
               本篇构思
               <span className="ml-2 font-bold tracking-normal normal-case text-slate-300">写具体一点，AI 会照着它写</span>
             </label>
@@ -1559,7 +1559,7 @@ export function StoryComposer({
           {/* 参考素材 —— 有素材就是「改编底本」：以它为主线情节，AI 只补细节与衔接 */}
           <div className="space-y-3">
             <div className="flex items-end justify-between gap-3">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left block">
+              <label className="text-[10px] font-black tracking-widest text-slate-400 text-left block">
                 参考素材 · 改编底本
                 <span className="ml-2 font-bold tracking-normal normal-case text-slate-300">
                   可留空 · 一篇对应一篇 · 填了即「素材优先」
@@ -1574,7 +1574,7 @@ export function StoryComposer({
                     ? `一次批量最多 ${MAX_BATCH_STORIES} 篇`
                     : '再加一篇素材（自动把批量篇数加到对应数量）'
                 }
-                className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-indigo-50 border border-indigo-100 text-[9px] font-black uppercase tracking-widest text-indigo-600 hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-indigo-50 border border-indigo-100 text-[9px] font-black tracking-widest text-indigo-600 hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
               >
                 <Plus size={12} /> 添加素材
               </button>
@@ -1591,7 +1591,7 @@ export function StoryComposer({
                     }`}
                   >
                     <div className="flex items-center justify-between gap-3 px-1 mb-2">
-                      <span className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-400">
+                      <span className="flex items-center gap-2 text-[9px] font-black tracking-widest text-slate-400">
                         素材 {index + 1}
                         <span
                           className={`px-2 py-0.5 rounded-full text-[8px] font-black tracking-normal normal-case ${
@@ -1629,7 +1629,7 @@ export function StoryComposer({
 
             {hasAnyMaterial && (
               <div className="p-4 rounded-3xl bg-indigo-50/70 border border-indigo-100 text-left">
-                <p className="text-[9px] font-black uppercase tracking-widest text-indigo-500">
+                <p className="text-[9px] font-black tracking-widest text-indigo-500">
                   素材优先模式{materialFirst ? ' · 已启用' : ' · 部分篇目启用'}
                 </p>
                 <p className="mt-1.5 text-[10px] font-bold text-indigo-700/80 leading-relaxed">
@@ -1651,7 +1651,7 @@ export function StoryComposer({
 
           {/* 篇幅 */}
           <div className="space-y-2.5">
-            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left block">篇幅</label>
+            <label className="text-[10px] font-black tracking-widest text-slate-400 text-left block">篇幅</label>
             <div className="grid grid-cols-3 gap-2">
               {LENGTH_PRESETS.map((p) => (
                 <button
@@ -1685,7 +1685,7 @@ export function StoryComposer({
           {/* Seed · 同 Seed 同骨架 / 换一版换表皮 */}
           <div className="space-y-3 pt-4 border-t border-slate-100">
             <div className="flex items-center justify-between gap-3">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left block">
+              <label className="text-[10px] font-black tracking-widest text-slate-400 text-left block">
                 Seed · 复现
                 <span className="ml-2 font-bold tracking-normal normal-case text-slate-300">
                   同 Seed = 同一副骨架
@@ -1705,7 +1705,7 @@ export function StoryComposer({
                 onClick={handleNewSeed}
                 disabled={busy !== 'idle'}
                 title="发一个新 Seed：下一篇文章换一副骨架"
-                className="px-4 rounded-2xl bg-slate-900 text-white text-[10px] font-black uppercase flex items-center gap-2 disabled:opacity-50"
+                className="px-4 rounded-2xl bg-slate-900 text-white text-[10px] font-black flex items-center gap-2 disabled:opacity-50"
               >
                 <Dices size={13} /> 新 Seed
               </button>
@@ -1717,7 +1717,7 @@ export function StoryComposer({
                   onClick={handleVariant}
                   disabled={busy !== 'idle'}
                   title="骨架逐字不动，只换人名、地点、时间、物件，正文整篇重写"
-                  className="px-4 py-2.5 rounded-2xl bg-indigo-50 border border-indigo-100 text-[10px] font-black uppercase tracking-widest text-indigo-700 hover:bg-indigo-100 disabled:opacity-50 transition-all flex items-center gap-2"
+                  className="px-4 py-2.5 rounded-2xl bg-indigo-50 border border-indigo-100 text-[10px] font-black tracking-widest text-indigo-700 hover:bg-indigo-100 disabled:opacity-50 transition-all flex items-center gap-2"
                 >
                   {busy === 'generate' && progress?.phase !== 'plan' ? (
                     <Loader2 size={12} className="animate-spin" />
@@ -1752,13 +1752,13 @@ export function StoryComposer({
 
           <div className="space-y-3 pt-4 border-t border-slate-100">
             <div className="flex items-center justify-between">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left block">
+              <label className="text-[10px] font-black tracking-widest text-slate-400 text-left block">
                 常用配方
               </label>
               <button
                 type="button"
                 onClick={() => setShowPresetInput((v) => !v)}
-                className="flex items-center gap-1.5 text-[9px] font-black uppercase text-indigo-500 hover:text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-full transition-all"
+                className="flex items-center gap-1.5 text-[9px] font-black text-indigo-500 hover:text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-full transition-all"
               >
                 <Save size={11} /> 保存当前组合
               </button>
@@ -1776,7 +1776,7 @@ export function StoryComposer({
                   type="button"
                   onClick={savePreset}
                   disabled={savingPreset}
-                  className="px-5 rounded-2xl bg-slate-900 text-white text-[10px] font-black uppercase flex items-center gap-2 disabled:opacity-50"
+                  className="px-5 rounded-2xl bg-slate-900 text-white text-[10px] font-black flex items-center gap-2 disabled:opacity-50"
                 >
                   {savingPreset ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />} 存
                 </button>
@@ -1815,7 +1815,7 @@ export function StoryComposer({
           {preview && (
             <div className="space-y-4 p-6 rounded-[32px] bg-slate-50 border border-slate-100">
               <div className="flex items-center justify-between gap-3">
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left block">
+                <label className="text-[10px] font-black tracking-widest text-slate-400 text-left block">
                   预览
                 </label>
                 <span className="text-[10px] font-black text-slate-400">
@@ -1833,7 +1833,7 @@ export function StoryComposer({
               {storySections.length > 0 && (
                 <div className="space-y-2 pt-3 border-t border-slate-200/80">
                   <div className="flex items-center justify-between gap-3">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left block">
+                    <label className="text-[10px] font-black tracking-widest text-slate-400 text-left block">
                       分段 · 可单独重写
                     </label>
                     <span className="text-[9px] font-black text-slate-300">
@@ -1892,7 +1892,7 @@ export function StoryComposer({
                                 type="button"
                                 onClick={() => handleSectionRewrite(i)}
                                 disabled={busy !== 'idle'}
-                                className="px-4 py-2.5 rounded-2xl bg-slate-900 text-white text-[9px] font-black uppercase tracking-widest flex items-center gap-2 hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                                className="px-4 py-2.5 rounded-2xl bg-slate-900 text-white text-[9px] font-black tracking-widest flex items-center gap-2 hover:bg-indigo-700 disabled:opacity-50 transition-colors"
                               >
                                 {sectionBusy === i ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
                                 {sectionBusy === i ? '正在重写这段…' : '重写这段'}
@@ -1932,7 +1932,7 @@ export function StoryComposer({
                     onClick={handleReview}
                     disabled={busy !== 'idle'}
                     title="让 AI 当审稿人：6 个维度打分，并列出该改的地方（只读，不动稿子）"
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-white border border-slate-200 text-[10px] font-black uppercase tracking-widest text-slate-600 hover:border-indigo-200 hover:text-indigo-600 disabled:opacity-50 transition-all"
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-white border border-slate-200 text-[10px] font-black tracking-widest text-slate-600 hover:border-indigo-200 hover:text-indigo-600 disabled:opacity-50 transition-all"
                   >
                     {busy === 'review' ? <Loader2 size={13} className="animate-spin" /> : <ClipboardCheck size={13} />}
                     {busy === 'review' ? '正在自评…' : review ? '重新自评' : 'AI 自评'}
@@ -1982,7 +1982,7 @@ export function StoryComposer({
                       </p>
                     ) : (
                       <>
-                        <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left block">
+                        <label className="text-[10px] font-black tracking-widest text-slate-400 text-left block">
                           待改 {review.issues.length} 条（默认只勾必改和低分维度）
                         </label>
                         {review.issues.map((it) => (
@@ -2003,7 +2003,7 @@ export function StoryComposer({
                                 <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${severityTone(it.severity)}`}>
                                   {SEVERITY_LABEL[it.severity]}
                                 </span>
-                                <span className="text-[9px] font-black uppercase tracking-wider text-slate-400">
+                                <span className="text-[9px] font-black tracking-wider text-slate-400">
                                   {REVIEW_DIMENSIONS.find((d) => d.key === it.dimension)?.label || it.dimension}
                                 </span>
                               </span>
@@ -2026,7 +2026,7 @@ export function StoryComposer({
 
                 {/* ---- 你的评价与想法：和 AI 的报告合起来，才叫「我和 AI 一起评的」 ---- */}
                 <div className="pt-3 border-t border-slate-200/80 space-y-2.5">
-                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-left block">
+                  <label className="text-[10px] font-black tracking-widest text-slate-400 text-left block">
                     你的评价与想法
                     <span className="ml-2 font-bold tracking-normal normal-case text-slate-300">
                       可留空 —— 写了就按你说的改
@@ -2054,7 +2054,7 @@ export function StoryComposer({
                   onClick={handleRewrite}
                   disabled={busy !== 'idle' || (!picked.length && !reviewNotes.trim())}
                   title="只改勾选的条目和你写的意见，其余逐字保留；你要它改情节 / 开篇 / 结局时，它会真的改结构"
-                  className="w-full h-12 rounded-2xl bg-indigo-600 text-white text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                  className="w-full h-12 rounded-2xl bg-indigo-600 text-white text-[10px] font-black tracking-widest flex items-center justify-center gap-2 hover:bg-indigo-700 disabled:opacity-50 transition-colors"
                 >
                   {busy === 'rewrite' ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
                   {busy === 'rewrite' ? '正在重写…' : rewriteLabel}
@@ -2071,7 +2071,7 @@ export function StoryComposer({
           {batchResults.length > 0 && (
             <div className="space-y-2 p-5 rounded-3xl bg-indigo-50/60 border border-indigo-100">
               <div className="flex items-center justify-between">
-                <label className="text-[10px] font-black uppercase tracking-widest text-indigo-400 text-left block">
+                <label className="text-[10px] font-black tracking-widest text-indigo-400 text-left block">
                   批量结果
                 </label>
                 <span className="text-[9px] font-black text-indigo-400">
@@ -2146,7 +2146,7 @@ export function StoryComposer({
           )}
           {/* 批量：一次写 1–5 篇，直接落库成草稿。手机上藏起来，避免底部动作条挤爆。 */}
           <div className="hidden sm:flex items-center gap-2 pb-1">
-            <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 shrink-0">
+            <span className="text-[9px] font-black tracking-widest text-slate-400 shrink-0">
               批量创作
             </span>
             <div className="flex items-center gap-1 rounded-2xl bg-slate-50 border border-slate-100 p-1">
@@ -2171,7 +2171,7 @@ export function StoryComposer({
               type="button"
               onClick={handleBatchGenerate}
               disabled={busy !== 'idle'}
-              className="flex-1 h-9 rounded-2xl bg-indigo-50 border border-indigo-100 text-indigo-700 font-black text-[10px] uppercase tracking-widest hover:bg-indigo-100 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+              className="flex-1 h-9 rounded-2xl bg-indigo-50 border border-indigo-100 text-indigo-700 font-black text-[10px] tracking-widest hover:bg-indigo-100 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
             >
               {busy === 'batch' ? (
                 <>
@@ -2190,7 +2190,7 @@ export function StoryComposer({
               type="button"
               onClick={handleGenerate}
               disabled={busy !== 'idle'}
-              className="flex-1 h-14 rounded-2xl bg-slate-900 text-white font-black text-[11px] uppercase tracking-widest shadow-xl flex items-center justify-center gap-3 hover:scale-[1.02] disabled:opacity-60 transition-all"
+              className="flex-1 h-14 rounded-2xl bg-slate-900 text-white font-black text-[11px] tracking-widest shadow-xl flex items-center justify-center gap-3 hover:scale-[1.02] disabled:opacity-60 transition-all"
             >
               {busy === 'generate' ? (
                 <>
@@ -2212,7 +2212,7 @@ export function StoryComposer({
               type="button"
               onClick={handleApply}
               disabled={!preview || busy !== 'idle'}
-              className="h-14 px-6 rounded-2xl border border-slate-200 text-slate-600 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 hover:border-slate-900 hover:text-slate-900 disabled:opacity-40 transition-all"
+              className="h-14 px-6 rounded-2xl border border-slate-200 text-slate-600 font-black text-[10px] tracking-widest flex items-center justify-center gap-2 hover:border-slate-900 hover:text-slate-900 disabled:opacity-40 transition-all"
             >
               <PenLine size={15} /> {applied ? '再插一次' : '插入编辑器'}
             </button>
@@ -2222,7 +2222,7 @@ export function StoryComposer({
               type="button"
               onClick={handleContinue}
               disabled={busy !== 'idle'}
-              className="w-full h-11 rounded-2xl border border-dashed border-slate-200 text-slate-400 font-black text-[10px] uppercase tracking-widest hover:border-slate-400 hover:text-slate-600 disabled:opacity-40 transition-all flex items-center justify-center gap-2"
+              className="w-full h-11 rounded-2xl border border-dashed border-slate-200 text-slate-400 font-black text-[10px] tracking-widest hover:border-slate-400 hover:text-slate-600 disabled:opacity-40 transition-all flex items-center justify-center gap-2"
             >
               {busy === 'continue' ? (
                 <>

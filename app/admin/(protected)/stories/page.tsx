@@ -122,19 +122,19 @@ export default function StoryListPage() {
           <div>
             <div className="flex items-center gap-3">
               <div className="bg-slate-900 p-2 rounded-xl text-white shadow-lg"><BookOpen size={20} /></div>
-              <h2 className="text-2xl font-black italic uppercase tracking-tighter text-slate-900">Story Studio</h2>
+              <h2 className="text-2xl font-black italic tracking-tighter text-slate-900">Story Studio</h2>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
              <div className="relative group hidden sm:block">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={14} />
-                <input className="bg-white border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-[10px] font-bold uppercase outline-none focus:border-slate-900 transition-all w-48 shadow-sm" placeholder="搜索..." />
+                <input className="bg-white border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-[10px] font-bold outline-none focus:border-slate-900 transition-all w-48 shadow-sm" placeholder="搜索..." />
              </div>
              <IndexNowButton className="px-6 py-2.5 rounded-xl text-[10px]" />
              <button 
                onClick={() => router.push('/admin/stories/create')}
-               className="bg-slate-900 text-white px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-black shadow-lg transition-all flex items-center gap-2"
+               className="bg-slate-900 text-white px-6 py-2.5 rounded-xl text-[10px] font-black tracking-widest hover:bg-black shadow-lg transition-all flex items-center gap-2"
              >
                <Plus size={14} /> 新增
              </button>
@@ -146,11 +146,11 @@ export default function StoryListPage() {
           {loading ? (
             <div className="flex flex-col items-center justify-center py-20 text-slate-400">
               <Loader2 className="animate-spin mb-3" size={24} />
-              <p className="text-[9px] font-bold uppercase tracking-widest">同步中...</p>
+              <p className="text-[9px] font-bold tracking-widest">同步中...</p>
             </div>
           ) : stories.length === 0 ? (
             <div className="text-center py-12 bg-white border border-dashed border-slate-200 rounded-[24px]">
-              <p className="text-slate-400 font-bold text-xs uppercase">空空如也</p>
+              <p className="text-slate-400 font-bold text-xs">空空如也</p>
             </div>
           ) : (
             stories.map((story) => {
@@ -172,17 +172,17 @@ export default function StoryListPage() {
                   {/* 核心标题信息 */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-3 mb-1">
-                      <h3 className="text-sm font-black text-slate-900 truncate uppercase italic tracking-tight">{story.title || "未命名"}</h3>
-                      <span className={`text-[8px] font-black px-2 py-0.5 rounded-md uppercase ${ROW_STATUS_STYLE[rowStatus(story)] || 'bg-slate-100 text-slate-400'}`}>
+                      <h3 className="text-sm font-black text-slate-900 truncate italic tracking-tight">{story.title || "未命名"}</h3>
+                      <span className={`text-[8px] font-black px-2 py-0.5 rounded-md ${ROW_STATUS_STYLE[rowStatus(story)] || 'bg-slate-100 text-slate-400'}`}>
                           {ROW_STATUS_LABEL[rowStatus(story)] || rowStatus(story)}
                       </span>
                       {story.is_featured && (
-                        <span className="text-[8px] font-black px-2 py-0.5 rounded-md uppercase bg-amber-50 text-amber-500 flex items-center gap-1">
+                        <span className="text-[8px] font-black px-2 py-0.5 rounded-md bg-amber-50 text-amber-500 flex items-center gap-1">
                           <Star size={9} fill="currentColor" /> 主推
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-4 text-[9px] font-bold text-slate-400 uppercase tracking-widest">
+                    <div className="flex items-center gap-4 text-[9px] font-bold text-slate-400 tracking-widest">
                        <span className="flex items-center gap-1"><Layers size={10}/> {episodeCount} Episodes</span>
                        <span className="flex items-center gap-1"><Eye size={10}/> 0 Views</span>
                        {rowStatus(story) === 'scheduled' && story.scheduled_at && (

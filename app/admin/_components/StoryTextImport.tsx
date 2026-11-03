@@ -47,7 +47,7 @@ type Props = {
 const EMPTY: SplitResult = { parts: [], rules: [], warnings: [], notes: [] }
 
 const ghostButton =
-  'text-[9px] font-black uppercase tracking-widest px-3 py-2 rounded-xl text-slate-500 hover:bg-slate-100 flex items-center gap-1.5 transition-all'
+  'text-[9px] font-black tracking-widest px-3 py-2 rounded-xl text-slate-500 hover:bg-slate-100 flex items-center gap-1.5 transition-all'
 
 const iconButton = 'p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-all'
 
@@ -191,7 +191,7 @@ export default function StoryTextImport({ open, onClose, existingCount, onApply,
               <Layers size={16} />
             </div>
             <div>
-              <h3 className="text-sm font-black uppercase tracking-widest text-slate-900">导入稿件</h3>
+              <h3 className="text-sm font-black tracking-widest text-slate-900">导入稿件</h3>
               <p className="text-[10px] font-bold text-slate-400 mt-0.5">
                 整篇文本自动切章 · 导入后一律先落草稿，排期 / 发布仍在编辑页
               </p>
@@ -212,7 +212,7 @@ export default function StoryTextImport({ open, onClose, existingCount, onApply,
               key={key}
               type="button"
               onClick={() => setTab(key)}
-              className={`px-5 py-2.5 rounded-t-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+              className={`px-5 py-2.5 rounded-t-xl text-[10px] font-black tracking-widest transition-all ${
                 tab === key ? 'bg-slate-900 text-white' : 'text-slate-400 hover:text-slate-600'
               }`}
             >
@@ -233,7 +233,7 @@ export default function StoryTextImport({ open, onClose, existingCount, onApply,
                     <button
                       type="button"
                       onClick={() => fileRef.current?.click()}
-                      className="text-[9px] font-black uppercase tracking-widest px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 flex items-center gap-1.5 transition-all"
+                      className="text-[9px] font-black tracking-widest px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 flex items-center gap-1.5 transition-all"
                     >
                       <UploadCloud size={12} /> 上传 .txt / .md
                     </button>
@@ -285,7 +285,7 @@ export default function StoryTextImport({ open, onClose, existingCount, onApply,
               {parts.length > 0 && (
                 <div className="px-6 pb-4 space-y-3">
                   <div className="flex items-center gap-3 flex-wrap bg-white rounded-2xl border border-slate-200 px-4 py-3">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-900">
+                    <span className="text-[10px] font-black tracking-widest text-slate-900">
                       {parts.length} 章
                     </span>
                     <span className="w-px h-3 bg-slate-200" />
@@ -298,7 +298,7 @@ export default function StoryTextImport({ open, onClose, existingCount, onApply,
                       {info.rules.map((rule) => (
                         <span
                           key={rule}
-                          className="text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-lg bg-slate-100 text-slate-500"
+                          className="text-[9px] font-black tracking-widest px-2 py-1 rounded-lg bg-slate-100 text-slate-500"
                         >
                           {RULE_LABEL[rule] ?? rule}
                         </span>
@@ -324,7 +324,7 @@ export default function StoryTextImport({ open, onClose, existingCount, onApply,
                     <button
                       type="button"
                       onClick={evenSplit}
-                      className="text-[9px] font-black uppercase tracking-widest px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 flex items-center gap-1.5 transition-all"
+                      className="text-[9px] font-black tracking-widest px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 flex items-center gap-1.5 transition-all"
                     >
                       <Scissors size={12} /> 没找到章节标记，按约 3000 字等分
                     </button>
@@ -334,7 +334,7 @@ export default function StoryTextImport({ open, onClose, existingCount, onApply,
 
               {/* 预览列表：标题可改，切错就合并 / 再拆 */}
               {parts.length === 0 ? (
-                <div className="px-6 pb-10 text-center text-[10px] font-black uppercase tracking-widest text-slate-300">
+                <div className="px-6 pb-10 text-center text-[10px] font-black tracking-widest text-slate-300">
                   {raw.trim() ? '正在切章…' : '还没有内容'}
                 </div>
               ) : (
@@ -419,7 +419,7 @@ export default function StoryTextImport({ open, onClose, existingCount, onApply,
                     key={key}
                     type="button"
                     onClick={() => setMode(key)}
-                    className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${
+                    className={`px-4 py-2 rounded-xl text-[9px] font-black tracking-widest transition-all ${
                       mode === key ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-400 hover:text-slate-600'
                     }`}
                   >
@@ -432,7 +432,7 @@ export default function StoryTextImport({ open, onClose, existingCount, onApply,
                 <button
                   type="button"
                   onClick={close}
-                  className="px-5 py-2.5 rounded-xl text-[10px] font-black uppercase text-slate-500 hover:bg-slate-50 transition-all"
+                  className="px-5 py-2.5 rounded-xl text-[10px] font-black text-slate-500 hover:bg-slate-50 transition-all"
                 >
                   取消
                 </button>
@@ -440,7 +440,7 @@ export default function StoryTextImport({ open, onClose, existingCount, onApply,
                   type="button"
                   onClick={handleApply}
                   disabled={!canApply}
-                  className="bg-slate-900 text-white px-8 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-xl flex items-center gap-2 disabled:opacity-40 transition-all"
+                  className="bg-slate-900 text-white px-8 py-2.5 rounded-xl text-[10px] font-black tracking-widest shadow-xl flex items-center gap-2 disabled:opacity-40 transition-all"
                 >
                   {writing ? <Loader2 size={14} className="animate-spin" /> : <Layers size={14} />}
                   {writing ? '写入中...' : `导入 ${parts.length} 章`}

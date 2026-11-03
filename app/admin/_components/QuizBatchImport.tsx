@@ -137,7 +137,7 @@ function PackCard({
   }
 
   const actionClass =
-    'text-[9px] font-black uppercase tracking-widest px-2.5 py-1.5 rounded-lg text-slate-500 hover:bg-slate-100 flex items-center gap-1 transition-all'
+    'text-[9px] font-black tracking-widest px-2.5 py-1.5 rounded-lg text-slate-500 hover:bg-slate-100 flex items-center gap-1 transition-all'
 
   return (
     <div className="bg-white rounded-[28px] border border-slate-200 overflow-hidden shadow-sm">
@@ -146,7 +146,7 @@ function PackCard({
           <span className="w-6 h-6 rounded-lg bg-slate-900 text-white text-[10px] font-black flex items-center justify-center shrink-0">
             {index + 1}
           </span>
-          <span className={`text-[9px] font-black uppercase tracking-widest px-3 py-1 rounded-full border truncate ${badge.className}`}>
+          <span className={`text-[9px] font-black tracking-widest px-3 py-1 rounded-full border truncate ${badge.className}`}>
             {badge.label}
           </span>
         </div>
@@ -334,7 +334,7 @@ export default function QuizBatchImport({ open, onClose, onImported, onError }: 
 
   const canSubmit = !saving && readyEntries.length > 0 && brokenCards === 0
   const ghostButton =
-    'text-[9px] font-black uppercase tracking-widest px-3 py-2 rounded-xl text-slate-500 hover:bg-slate-100 flex items-center gap-1.5 transition-all'
+    'text-[9px] font-black tracking-widest px-3 py-2 rounded-xl text-slate-500 hover:bg-slate-100 flex items-center gap-1.5 transition-all'
 
   return (
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
@@ -345,7 +345,7 @@ export default function QuizBatchImport({ open, onClose, onImported, onError }: 
               <ClipboardPaste size={16} />
             </div>
             <div>
-              <h3 className="text-sm font-black uppercase tracking-widest text-slate-900">批量草稿导入</h3>
+              <h3 className="text-sm font-black tracking-widest text-slate-900">批量草稿导入</h3>
               <p className="text-[10px] font-bold text-slate-400 mt-0.5">一个框一篇 · 导入后一律是草稿，排期 / 发布仍在编辑页</p>
             </div>
           </div>
@@ -356,7 +356,7 @@ export default function QuizBatchImport({ open, onClose, onImported, onError }: 
 
         {helpOpen && (
           <div className="px-6 py-4 bg-blue-50/60 border-b border-blue-100 space-y-2 shrink-0 max-h-60 overflow-y-auto">
-            <p className="text-[10px] font-black uppercase tracking-widest text-blue-600">格式要求</p>
+            <p className="text-[10px] font-black tracking-widest text-blue-600">格式要求</p>
             <ul className="space-y-1">
               {QUIZ_PACK_CHECKLIST.map((item) => (
                 <li key={item} className="text-[11px] font-bold text-slate-600 leading-relaxed flex gap-2">
@@ -373,7 +373,7 @@ export default function QuizBatchImport({ open, onClose, onImported, onError }: 
 
         {splitOpen && (
           <div className="px-6 py-4 bg-indigo-50/60 border-b border-indigo-100 space-y-2 shrink-0">
-            <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500">
+            <p className="text-[10px] font-black tracking-widest text-indigo-500">
               整段粘贴：把一整个 [ ... ] 数组拆成多个框
             </p>
             <textarea
@@ -402,7 +402,7 @@ export default function QuizBatchImport({ open, onClose, onImported, onError }: 
                 type="button"
                 onClick={handleSplit}
                 disabled={!splitText.trim()}
-                className="bg-indigo-600 text-white px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest disabled:opacity-40"
+                className="bg-indigo-600 text-white px-5 py-2 rounded-xl text-[10px] font-black tracking-widest disabled:opacity-40"
               >
                 拆分到多个框
               </button>
@@ -442,7 +442,7 @@ export default function QuizBatchImport({ open, onClose, onImported, onError }: 
               {brokenCards > 0 ? `${brokenCards} 个框要修 · ` : ''}
               {readyEntries.length}/{totalEntries} 篇就绪
             </span>
-            <button type="button" onClick={onClose} className="px-5 py-3 text-[10px] font-black uppercase text-slate-500 rounded-xl">
+            <button type="button" onClick={onClose} className="px-5 py-3 text-[10px] font-black text-slate-500 rounded-xl">
               取消
             </button>
             <button
@@ -450,7 +450,7 @@ export default function QuizBatchImport({ open, onClose, onImported, onError }: 
               onClick={handleSubmit}
               disabled={!canSubmit}
               title={brokenCards > 0 ? '有框没通过校验，先修掉或删掉它' : undefined}
-              className="bg-blue-600 text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-xl active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
+              className="bg-blue-600 text-white px-6 py-3 rounded-xl text-[10px] font-black tracking-widest shadow-xl active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
             >
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
               {saving ? '写入中…' : `保存到草稿箱 (${readyEntries.length}/${totalEntries})`}

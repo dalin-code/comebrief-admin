@@ -123,7 +123,7 @@ function TagEditor({
           className="flex-1 min-w-[140px] px-4 py-2.5 bg-slate-50 rounded-xl text-sm font-black text-slate-900 outline-none border border-transparent focus:border-indigo-300 focus:bg-white transition-all"
         />
         <div className="flex items-center gap-1.5 text-slate-400">
-          <span className="text-[9px] font-black uppercase tracking-widest">排序</span>
+          <span className="text-[9px] font-black tracking-widest">排序</span>
           <input
             value={draft.sort_order}
             onChange={(e) => setDraft({ ...draft, sort_order: e.target.value })}
@@ -136,7 +136,7 @@ function TagEditor({
           onClick={toggleActive}
           disabled={busy === "toggle"}
           title={tag.is_active ? "停用：面板上不再出现，但文案保留" : "启用：重新出现在面板上"}
-          className={`h-10 px-4 rounded-xl text-[9px] font-black uppercase tracking-widest flex items-center gap-1.5 transition-all ${
+          className={`h-10 px-4 rounded-xl text-[9px] font-black tracking-widest flex items-center gap-1.5 transition-all ${
             tag.is_active
               ? "bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
               : "bg-slate-200 text-slate-500 hover:bg-slate-300"
@@ -178,7 +178,7 @@ function TagEditor({
 
       <div className="flex items-center justify-end gap-2 mt-4">
         {dirty && (
-          <span className="mr-auto text-[9px] font-black uppercase tracking-widest text-amber-500">
+          <span className="mr-auto text-[9px] font-black tracking-widest text-amber-500">
             有未保存的改动
           </span>
         )}
@@ -186,7 +186,7 @@ function TagEditor({
           type="button"
           onClick={remove}
           disabled={busy === "delete"}
-          className="h-10 px-4 rounded-xl text-[9px] font-black uppercase tracking-widest text-rose-500 hover:bg-rose-50 transition-all flex items-center gap-1.5"
+          className="h-10 px-4 rounded-xl text-[9px] font-black tracking-widest text-rose-500 hover:bg-rose-50 transition-all flex items-center gap-1.5"
         >
           {busy === "delete" ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />} 删除
         </button>
@@ -194,7 +194,7 @@ function TagEditor({
           type="button"
           onClick={save}
           disabled={busy === "save" || !dirty}
-          className={`h-10 px-5 rounded-xl text-[9px] font-black uppercase tracking-widest flex items-center gap-1.5 transition-all ${
+          className={`h-10 px-5 rounded-xl text-[9px] font-black tracking-widest flex items-center gap-1.5 transition-all ${
             dirty ? "bg-slate-900 text-white hover:bg-black" : "bg-slate-100 text-slate-300 cursor-not-allowed"
           }`}
         >
@@ -224,7 +224,7 @@ function Field({
   return (
     <label className="block">
       <span
-        className={`block mb-1.5 ml-1 text-[9px] font-black uppercase tracking-widest ${
+        className={`block mb-1.5 ml-1 text-[9px] font-black tracking-widest ${
           accent ? "text-indigo-500" : "text-slate-400"
         }`}
       >
@@ -358,7 +358,7 @@ export default function StoryTagsAdmin() {
 
   if (loading)
     return (
-      <div className="p-20 text-center animate-pulse font-black text-slate-300 uppercase italic tracking-widest">
+      <div className="p-20 text-center animate-pulse font-black text-slate-300 italic tracking-widest">
         Loading Story Tags...
       </div>
     );
@@ -368,7 +368,7 @@ export default function StoryTagsAdmin() {
       {/* 顶部固定栏 */}
       <div className="max-w-5xl mx-auto mb-12 flex flex-wrap justify-between items-center gap-4 sticky top-0 bg-[#FAFAFA]/85 backdrop-blur-md z-10 py-4 border-b border-slate-200">
         <div>
-          <h2 className="text-2xl font-black italic uppercase tracking-tighter flex items-center gap-2">
+          <h2 className="text-2xl font-black italic tracking-tighter flex items-center gap-2">
             <Tags className="text-slate-900" size={24} /> Story Tags
           </h2>
           <p className="text-[10px] font-bold text-slate-400 mt-1">
@@ -378,7 +378,7 @@ export default function StoryTagsAdmin() {
         <div className="flex items-center gap-3">
           {notice && (
             <span
-              className={`text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 ${
+              className={`text-[10px] font-black tracking-widest flex items-center gap-1.5 ${
                 notice.type === "ok" ? "text-emerald-500" : "text-rose-500"
               }`}
             >
@@ -391,7 +391,7 @@ export default function StoryTagsAdmin() {
               load();
               loadPresets();
             }}
-            className="flex items-center gap-2 px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] bg-slate-900 text-white hover:bg-black active:scale-95 shadow-xl shadow-slate-200 transition-all"
+            className="flex items-center gap-2 px-6 py-3 rounded-2xl text-[10px] font-black tracking-[0.2em] bg-slate-900 text-white hover:bg-black active:scale-95 shadow-xl shadow-slate-200 transition-all"
           >
             <RotateCcw size={14} /> 重新读取
           </button>
@@ -429,7 +429,7 @@ export default function StoryTagsAdmin() {
           return (
             <section key={d.key} className="bg-white border border-slate-200 rounded-[40px] shadow-sm overflow-hidden">
               <div className="px-10 py-6 bg-slate-50/60 border-b border-slate-100 flex flex-wrap items-center gap-3">
-                <span className="text-[11px] font-black uppercase tracking-widest text-slate-900">
+                <span className="text-[11px] font-black tracking-widest text-slate-900">
                   {d.cn} {d.label}
                 </span>
                 <span className="text-[9px] font-bold text-slate-400">{d.hint}</span>
@@ -443,7 +443,7 @@ export default function StoryTagsAdmin() {
                     setAddingDim(open ? "" : d.key);
                     setAddDraft({ ...EMPTY_ADD });
                   }}
-                  className="ml-auto h-9 px-4 rounded-xl bg-slate-900 text-white text-[9px] font-black uppercase tracking-widest flex items-center gap-1.5 hover:bg-black active:scale-95 transition-all"
+                  className="ml-auto h-9 px-4 rounded-xl bg-slate-900 text-white text-[9px] font-black tracking-widest flex items-center gap-1.5 hover:bg-black active:scale-95 transition-all"
                 >
                   <Plus size={12} /> 新增标签
                 </button>
@@ -518,7 +518,7 @@ function AddTagCard({
           className="flex-1 min-w-[160px] px-4 py-2.5 bg-white rounded-xl text-sm font-black text-slate-900 outline-none border border-indigo-100 focus:border-indigo-300 transition-all"
         />
         <div className="flex items-center gap-1.5 text-slate-400">
-          <span className="text-[9px] font-black uppercase tracking-widest">排序</span>
+          <span className="text-[9px] font-black tracking-widest">排序</span>
           <input
             value={draft.sort_order}
             onChange={(e) => setDraft({ ...draft, sort_order: e.target.value })}
@@ -551,7 +551,7 @@ function AddTagCard({
         <button
           type="button"
           onClick={onCancel}
-          className="h-10 px-4 rounded-xl text-[9px] font-black uppercase tracking-widest text-slate-400 hover:bg-white transition-all"
+          className="h-10 px-4 rounded-xl text-[9px] font-black tracking-widest text-slate-400 hover:bg-white transition-all"
         >
           取消
         </button>
@@ -559,7 +559,7 @@ function AddTagCard({
           type="button"
           onClick={onSubmit}
           disabled={saving}
-          className="h-10 px-5 rounded-xl bg-emerald-500 text-white text-[9px] font-black uppercase tracking-widest flex items-center gap-1.5 hover:bg-emerald-600 active:scale-95 transition-all"
+          className="h-10 px-5 rounded-xl bg-emerald-500 text-white text-[9px] font-black tracking-widest flex items-center gap-1.5 hover:bg-emerald-600 active:scale-95 transition-all"
         >
           {saving ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />} 加进这一排
         </button>
@@ -583,7 +583,7 @@ function PresetsSection({
   return (
     <section className="bg-white border border-slate-200 rounded-[40px] shadow-sm overflow-hidden">
       <div className="px-10 py-6 bg-slate-50/60 border-b border-slate-100 flex flex-wrap items-center gap-3">
-        <span className="text-[11px] font-black uppercase tracking-widest text-slate-900 flex items-center gap-2">
+        <span className="text-[11px] font-black tracking-widest text-slate-900 flex items-center gap-2">
           <Bookmark size={14} className="text-indigo-500" /> 常用配方 (Presets)
         </span>
         <span className="text-[9px] font-bold text-slate-400">
@@ -608,7 +608,7 @@ function PresetsSection({
             <button
               type="button"
               onClick={() => onDelete(p)}
-              className="h-10 px-4 rounded-xl text-[9px] font-black uppercase tracking-widest text-rose-500 hover:bg-rose-50 transition-all flex items-center gap-1.5 shrink-0"
+              className="h-10 px-4 rounded-xl text-[9px] font-black tracking-widest text-rose-500 hover:bg-rose-50 transition-all flex items-center gap-1.5 shrink-0"
             >
               <Trash2 size={12} /> 删除
             </button>

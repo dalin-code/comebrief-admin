@@ -68,7 +68,7 @@ function Field({
   return (
     <label className="block">
       <span
-        className={`block mb-1.5 ml-1 text-[9px] font-black uppercase tracking-widest ${
+        className={`block mb-1.5 ml-1 text-[9px] font-black tracking-widest ${
           accent ? "text-indigo-500" : "text-slate-400"
         }`}
       >
@@ -232,16 +232,16 @@ function SkillEditor({
           className="flex-1 min-w-[200px] px-3 py-2 rounded-xl bg-slate-50 border border-transparent text-sm font-black text-slate-900 outline-none focus:border-indigo-200 focus:bg-white transition-all"
         />
         {skill.is_default && (
-          <span className="h-7 px-3 rounded-full bg-amber-100 text-amber-700 text-[9px] font-black uppercase tracking-widest flex items-center gap-1.5">
+          <span className="h-7 px-3 rounded-full bg-amber-100 text-amber-700 text-[9px] font-black tracking-widest flex items-center gap-1.5">
             <Star size={11} /> 默认
           </span>
         )}
         {!skill.is_active && (
-          <span className="h-7 px-3 rounded-full bg-slate-100 text-slate-400 text-[9px] font-black uppercase tracking-widest">
+          <span className="h-7 px-3 rounded-full bg-slate-100 text-slate-400 text-[9px] font-black tracking-widest">
             已停用
           </span>
         )}
-        <span className="h-7 px-3 rounded-full bg-slate-50 text-slate-400 text-[9px] font-black uppercase tracking-widest">
+        <span className="h-7 px-3 rounded-full bg-slate-50 text-slate-400 text-[9px] font-black tracking-widest">
           范文 {q.exChars} 字 · 姿态 {q.postureLines} 条
         </span>
       </div>
@@ -315,7 +315,7 @@ function SkillEditor({
           placeholder="例如：悬疑 / 推理 / 惊悚恐怖"
         />
         <label className="block">
-          <span className="block mb-1.5 ml-1 text-[9px] font-black uppercase tracking-widest text-slate-400">
+          <span className="block mb-1.5 ml-1 text-[9px] font-black tracking-widest text-slate-400">
             排序 · 数字越小越靠前
           </span>
           <input
@@ -329,7 +329,7 @@ function SkillEditor({
 
       <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
         {dirty && (
-          <span className="mr-auto text-[9px] font-black uppercase tracking-widest text-amber-500">
+          <span className="mr-auto text-[9px] font-black tracking-widest text-amber-500">
             有未保存的改动
           </span>
         )}
@@ -337,7 +337,7 @@ function SkillEditor({
           <button
             type="button"
             onClick={() => onSetDefault(skill)}
-            className="h-10 px-4 rounded-xl text-[9px] font-black uppercase tracking-widest text-amber-600 hover:bg-amber-50 transition-all flex items-center gap-1.5"
+            className="h-10 px-4 rounded-xl text-[9px] font-black tracking-widest text-amber-600 hover:bg-amber-50 transition-all flex items-center gap-1.5"
           >
             <Star size={12} /> 设为默认
           </button>
@@ -346,7 +346,7 @@ function SkillEditor({
           type="button"
           onClick={toggleActive}
           disabled={busy === "toggle"}
-          className="h-10 px-4 rounded-xl text-[9px] font-black uppercase tracking-widest text-slate-500 hover:bg-slate-50 transition-all flex items-center gap-1.5"
+          className="h-10 px-4 rounded-xl text-[9px] font-black tracking-widest text-slate-500 hover:bg-slate-50 transition-all flex items-center gap-1.5"
         >
           {busy === "toggle" ? (
             <Loader2 size={12} className="animate-spin" />
@@ -361,7 +361,7 @@ function SkillEditor({
           type="button"
           onClick={remove}
           disabled={busy === "delete"}
-          className="h-10 px-4 rounded-xl text-[9px] font-black uppercase tracking-widest text-rose-500 hover:bg-rose-50 transition-all flex items-center gap-1.5"
+          className="h-10 px-4 rounded-xl text-[9px] font-black tracking-widest text-rose-500 hover:bg-rose-50 transition-all flex items-center gap-1.5"
         >
           {busy === "delete" ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />} 删除
         </button>
@@ -369,7 +369,7 @@ function SkillEditor({
           type="button"
           onClick={save}
           disabled={busy === "save" || !dirty}
-          className={`h-10 px-5 rounded-xl text-[9px] font-black uppercase tracking-widest flex items-center gap-1.5 transition-all ${
+          className={`h-10 px-5 rounded-xl text-[9px] font-black tracking-widest flex items-center gap-1.5 transition-all ${
             dirty ? "bg-slate-900 text-white hover:bg-black" : "bg-slate-100 text-slate-300 cursor-not-allowed"
           }`}
         >
@@ -497,7 +497,7 @@ export default function StorySkillsAdmin() {
 
   if (loading)
     return (
-      <div className="p-20 text-center animate-pulse font-black text-slate-300 uppercase italic tracking-widest">
+      <div className="p-20 text-center animate-pulse font-black text-slate-300 italic tracking-widest">
         Loading Story Skills...
       </div>
     );
@@ -507,7 +507,7 @@ export default function StorySkillsAdmin() {
       {/* 顶部固定栏 */}
       <div className="max-w-5xl mx-auto mb-12 flex flex-wrap justify-between items-center gap-4 sticky top-0 bg-[#FAFAFA]/85 backdrop-blur-md z-10 py-4 border-b border-slate-200">
         <div>
-          <h2 className="text-2xl font-black italic uppercase tracking-tighter flex items-center gap-2">
+          <h2 className="text-2xl font-black italic tracking-tighter flex items-center gap-2">
             <PenTool className="text-slate-900" size={24} /> Story Skills
           </h2>
           <p className="text-[10px] font-bold text-slate-400 mt-1">
@@ -517,7 +517,7 @@ export default function StorySkillsAdmin() {
         <div className="flex items-center gap-3">
           {notice && (
             <span
-              className={`text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 ${
+              className={`text-[10px] font-black tracking-widest flex items-center gap-1.5 ${
                 notice.type === "ok" ? "text-emerald-500" : "text-rose-500"
               }`}
             >
@@ -528,7 +528,7 @@ export default function StorySkillsAdmin() {
           <button
             type="button"
             onClick={() => setShowAdd((v) => !v)}
-            className="h-11 px-5 rounded-2xl bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest flex items-center gap-2 hover:bg-black transition-all"
+            className="h-11 px-5 rounded-2xl bg-slate-900 text-white text-[10px] font-black tracking-widest flex items-center gap-2 hover:bg-black transition-all"
           >
             <Plus size={14} /> 新增写法
           </button>
@@ -544,7 +544,7 @@ export default function StorySkillsAdmin() {
       {showAdd && (
         <div className="max-w-5xl mx-auto mb-8 bg-white rounded-[32px] border-2 border-dashed border-slate-200 p-6 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-[11px] font-black uppercase tracking-widest text-slate-900 flex items-center gap-2">
+            <span className="text-[11px] font-black tracking-widest text-slate-900 flex items-center gap-2">
               <Plus size={14} className="text-emerald-500" /> 新增一套写法
             </span>
             <span className="text-[9px] font-bold text-slate-400">
@@ -631,7 +631,7 @@ export default function StorySkillsAdmin() {
             <button
               type="button"
               onClick={() => setShowAdd(false)}
-              className="h-10 px-4 rounded-xl text-[9px] font-black uppercase tracking-widest text-slate-400 hover:bg-slate-50 transition-all"
+              className="h-10 px-4 rounded-xl text-[9px] font-black tracking-widest text-slate-400 hover:bg-slate-50 transition-all"
             >
               取消
             </button>
@@ -639,7 +639,7 @@ export default function StorySkillsAdmin() {
               type="button"
               onClick={handleAdd}
               disabled={savingAdd}
-              className="h-10 px-5 rounded-xl bg-emerald-500 text-white text-[9px] font-black uppercase tracking-widest flex items-center gap-1.5 hover:bg-emerald-600 active:scale-95 transition-all"
+              className="h-10 px-5 rounded-xl bg-emerald-500 text-white text-[9px] font-black tracking-widest flex items-center gap-1.5 hover:bg-emerald-600 active:scale-95 transition-all"
             >
               {savingAdd ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />} 加进去
             </button>

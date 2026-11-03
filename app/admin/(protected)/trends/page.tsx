@@ -253,21 +253,21 @@ export default function TrendsManagementHub() {
       <div className="max-w-7xl mx-auto">
         <header className="flex flex-col md:flex-row justify-between items-start md:items-end mb-12 gap-6">
           <div className="space-y-2">
-            <h1 className="text-4xl md:text-5xl font-black italic tracking-tighter uppercase">TRENDS <span className="text-slate-200">/</span> <span className="text-emerald-500">MATRIX</span></h1>
-            <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-400">Content Control Center</p>
+            <h1 className="text-4xl md:text-5xl font-black italic tracking-tighter">TRENDS <span className="text-slate-200">/</span> <span className="text-emerald-500">MATRIX</span></h1>
+            <p className="text-[10px] font-black tracking-[0.3em] text-slate-400">Content Control Center</p>
           </div>
           <div className="flex gap-3 w-full md:w-auto flex-wrap">
-            <button onClick={handlePublishDue} disabled={publishing} title="把已到点的定时内容立即翻为已发布（外部定时器漏跑时的兜底入口）" className="flex-1 md:flex-none h-14 px-6 bg-white border border-slate-200 rounded-[20px] flex items-center justify-center gap-3 font-black text-[10px] uppercase hover:bg-slate-50 transition-all disabled:opacity-60"><Zap size={16} className="text-amber-500"/> {publishing ? 'Publishing...' : 'Publish Due'}</button>
+            <button onClick={handlePublishDue} disabled={publishing} title="把已到点的定时内容立即翻为已发布（外部定时器漏跑时的兜底入口）" className="flex-1 md:flex-none h-14 px-6 bg-white border border-slate-200 rounded-[20px] flex items-center justify-center gap-3 font-black text-[10px] hover:bg-slate-50 transition-all disabled:opacity-60"><Zap size={16} className="text-amber-500"/> {publishing ? 'Publishing...' : 'Publish Due'}</button>
             <IndexNowButton className="flex-1 md:flex-none h-14 px-6 rounded-[20px] text-[10px]" iconSize={16} />
-            <button onClick={handlePremiumSync} className="flex-1 md:flex-none h-14 px-6 bg-white border border-slate-200 rounded-[20px] flex items-center justify-center gap-3 font-black text-[10px] uppercase hover:bg-slate-50 transition-all"><Sparkles size={16} className="text-indigo-500"/> AI Premium x3</button>
+            <button onClick={handlePremiumSync} className="flex-1 md:flex-none h-14 px-6 bg-white border border-slate-200 rounded-[20px] flex items-center justify-center gap-3 font-black text-[10px] hover:bg-slate-50 transition-all"><Sparkles size={16} className="text-indigo-500"/> AI Premium x3</button>
             <Link href="/admin/trends/edit" className="h-14 bg-slate-900 text-white px-8 rounded-[24px] flex items-center justify-center gap-3 font-black hover:bg-emerald-600 transition-all shadow-xl shadow-emerald-500/10 active:scale-95 group"><Plus size={20} /><span>NEW POST</span></Link>
           </div>
         </header>
 
         {selectedIds.length > 0 && (
           <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[100] bg-slate-900 text-white px-8 py-5 rounded-[32px] shadow-2xl flex items-center gap-8 animate-in slide-in-from-bottom-10 border border-white/10 backdrop-blur-xl">
-            <span className="font-black italic text-emerald-400 uppercase tracking-widest text-sm">{selectedIds.length} Nodes</span>
-            <button onClick={onBatchDelete} className="flex items-center gap-2 text-rose-400 font-black uppercase text-[10px] tracking-widest"><Trash2 size={16} /> Bulk Shred</button>
+            <span className="font-black italic text-emerald-400 tracking-widest text-sm">{selectedIds.length} Nodes</span>
+            <button onClick={onBatchDelete} className="flex items-center gap-2 text-rose-400 font-black text-[10px] tracking-widest"><Trash2 size={16} /> Bulk Shred</button>
             <button onClick={() => setSelectedIds([])} className="p-2 hover:bg-white/10 rounded-full"><X size={18}/></button>
           </div>
         )}
@@ -278,7 +278,7 @@ export default function TrendsManagementHub() {
           <div className="overflow-x-auto">
             <table className="w-full text-left">
               <thead>
-                <tr className="bg-slate-50/50 border-b border-slate-100 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">
+                <tr className="bg-slate-50/50 border-b border-slate-100 text-[10px] font-black text-slate-400 tracking-[0.2em]">
                   <th className="px-8 py-7 w-12 text-center"><button onClick={() => setSelectedIds(selectedIds.length === filtered.length ? [] : filtered.map(r=>r.id))}><CheckSquare size={20} /></button></th>
                   <th className="px-6 py-7">Visual</th>
                   <th className="px-6 py-7">Intelligence</th>
@@ -302,11 +302,11 @@ export default function TrendsManagementHub() {
                     <td className="px-6 py-7">
                       <div className="font-black text-slate-800 text-lg leading-tight line-clamp-1 group-hover:text-emerald-600 transition-colors">{r.title || 'Untitled'}</div>
                       <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                        <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${STATUS_STYLE[r.display_status] || 'bg-slate-100 text-slate-500'}`}>
+                        <span className={`text-[8px] font-black px-2 py-0.5 rounded ${STATUS_STYLE[r.display_status] || 'bg-slate-100 text-slate-500'}`}>
                           {STATUS_LABEL[r.display_status] || r.display_status || '未设置'}
                         </span>
                         {r.display_status === 'scheduled' && r.scheduled_at && (
-                          <span className="text-[8px] font-black uppercase text-indigo-500 flex items-center gap-1">
+                          <span className="text-[8px] font-black text-indigo-500 flex items-center gap-1">
                             <Clock size={9} /> {formatDateTime(r.scheduled_at)}
                           </span>
                         )}
@@ -323,7 +323,7 @@ export default function TrendsManagementHub() {
                           (r.display_categories as string[]).map((cat, idx) => (
                             <span
                               key={`${r.id}-${cat}`}
-                              className={`px-3 py-1.5 text-[8px] font-black uppercase tracking-widest rounded-full flex items-center gap-1.5 shadow-sm w-max ${
+                              className={`px-3 py-1.5 text-[8px] font-black tracking-widest rounded-full flex items-center gap-1.5 shadow-sm w-max ${
                                 idx === 0 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500'
                               }`}
                             >
@@ -331,7 +331,7 @@ export default function TrendsManagementHub() {
                             </span>
                           ))
                         ) : (
-                          <span className="px-3 py-1.5 bg-slate-100 text-slate-400 text-[8px] font-black uppercase rounded-full">Uncategorized</span>
+                          <span className="px-3 py-1.5 bg-slate-100 text-slate-400 text-[8px] font-black rounded-full">Uncategorized</span>
                         )}
                       </div>
                     </td>
@@ -350,7 +350,7 @@ export default function TrendsManagementHub() {
                       </button>
                     </td>
                     <td className="px-6 py-7">
-                      <div className="flex flex-col gap-1 text-slate-400 text-[10px] font-black uppercase tracking-widest w-max">
+                      <div className="flex flex-col gap-1 text-slate-400 text-[10px] font-black tracking-widest w-max">
                         <div className="flex items-center gap-2">
                           <Clock size={12} className="text-slate-300" />
                           <span className={r.display_status === 'published' ? 'text-slate-500' : ''}>
@@ -376,7 +376,7 @@ export default function TrendsManagementHub() {
                 ))}
               </tbody>
             </table>
-            {busy && rows.length === 0 && <div className="py-20 text-center animate-pulse text-slate-300 font-black uppercase text-[10px] tracking-[0.5em]">Synchronizing...</div>}
+            {busy && rows.length === 0 && <div className="py-20 text-center animate-pulse text-slate-300 font-black text-[10px] tracking-[0.5em]">Synchronizing...</div>}
           </div>
         </div>
       </div>
@@ -386,15 +386,15 @@ export default function TrendsManagementHub() {
         <div className="fixed inset-0 z-[200] bg-slate-900/90 backdrop-blur-2xl flex items-center justify-center p-4 md:p-8 animate-in fade-in" onClick={() => setPreviewData(null)}>
           <div className="bg-white w-full max-w-4xl h-full max-h-[90vh] rounded-[48px] overflow-hidden flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
             <div className="p-8 border-b flex justify-between items-center bg-slate-50/50">
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 italic">Intelligence Live Node</span>
+              <span className="text-[10px] font-black tracking-widest text-slate-400 italic">Intelligence Live Node</span>
               <button onClick={() => setPreviewData(null)} className="w-12 h-12 bg-white rounded-full flex items-center justify-center hover:rotate-90 transition-all shadow-sm"><X size={24}/></button>
             </div>
             <div className="flex-1 overflow-y-auto p-8 md:p-20 custom-scrollbar">
               {previewBusy ? (
-                <div className="flex flex-col items-center justify-center h-full gap-4 text-slate-400 font-black uppercase text-[10px] tracking-[0.5em] animate-pulse"><Loader2 className="animate-spin" size={40} /> Pulling Deep Data...</div>
+                <div className="flex flex-col items-center justify-center h-full gap-4 text-slate-400 font-black text-[10px] tracking-[0.5em] animate-pulse"><Loader2 className="animate-spin" size={40} /> Pulling Deep Data...</div>
               ) : (
                 <article className="max-w-3xl mx-auto prose prose-slate prose-xl selection:bg-emerald-100">
-                  <span className="px-4 py-1.5 bg-slate-900 text-white text-[10px] font-black uppercase rounded-full mb-8 inline-block">{(Array.isArray(previewData.categories) ? previewData.categories.join(' · ') : '') || previewData.category}</span>
+                  <span className="px-4 py-1.5 bg-slate-900 text-white text-[10px] font-black rounded-full mb-8 inline-block">{(Array.isArray(previewData.categories) ? previewData.categories.join(' · ') : '') || previewData.category}</span>
                   <h1 className="font-black italic text-5xl md:text-7xl mb-12 tracking-tighter leading-[0.95]">{previewData.title}</h1>
                   {previewData.cover_url && <img src={previewData.cover_url} className="w-full aspect-video object-cover rounded-[40px] mb-16 shadow-2xl" />}
                   {/* 🚀 正文兼容性渲染 */}
