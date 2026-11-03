@@ -6,7 +6,7 @@ import { useSearchParams, useRouter } from 'next/navigation'
 import { 
   ArrowLeft, Loader2, Image as ImageIcon, Dice5, Clock, 
   TrendingUp, Flame, Star, Plus, Minus, Send, Save, Calendar, Zap,
-  Bold, Heading3, Quote, List, Sparkles, Upload, Check, Languages, AlertTriangle
+  Bold, Heading3, Quote, List, Sparkles, Upload, Check, Languages, AlertTriangle, Pencil
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { anonStorageClient, getFreshAccessToken, isAuthTokenError } from '@/lib/clientAuth'
@@ -241,13 +241,26 @@ function EditorContentComponent() {
   
   const [isEditingCats, setIsEditingCats] = useState(false);
   const [newCatInput, setNewCatInput] = useState('');
+  /** 正在等「新增话题」落库的那一下（按钮显示转圈，顺手挡住连点） */
+  const [addingCat, setAddingCat] = useState(false);
+  /** 正在改名的那个话题（只让它转圈，别的照样能点） */
+  const [renamingCat, setRenamingCat] = useState<string | null>(null);
   // 话题矩阵拖动排序：draggingCat = 手里正提着的那张，dragOverCat = 正悬停的那张（只为落点高亮）
   const [draggingCat, setDraggingCat] = useState<string | null>(null);
   const [dragOverCat, setDragOverCat] = useState<string | null>(null);
   
   // 🚀 核心正位：精简物理直调本地图片所用的两个 Input 引用
   const coverFileInputRef = useRef<HTMLInputElement>(null);
-  const hasLoadedRef = useRef(false);
+  /**
+   * 「已经装进编辑器的是哪一篇」—— 记 id 而不是一个 true/false。
+   *
+   * 以前这里是 `hasLoadedRef = useRef(false)`：第一次载入后永远为 true。
+   * 而 `/admin/trends/edit?id=A` → `?id=B` 是**同一个路由**，组件不会重新挂载
+   * （只有 searchParams 变了），于是 B 的正文、话题、运营标签全都装不进来 ——
+   * 站长看到的是 A 的稿子和 A 的话题矩阵，体感就是「标签没同步」。
+   * 现在按 id 判断：换了 id 就重新载入，同一篇重复触发也不会重复请求。
+   */
+  const loadedArticleIdRef = useRef<string | null>(null);
   /**
    * 上一次生成摘要是「复用」来的吗？
    * 是的话，这一下再点「生成摘要」就得强制重新问模型（请求体带 fresh: true）——
@@ -418,7 +431,7 @@ function EditorContentComponent() {
     
     const initEditorAndArticle = async () => {
       try {
-        const { data: catData } = await supabase
+        const { data: catData, error: catError } = await supabase
           .from('categories')
           .select('name')
           // 顺序就是站长拖出来的顺序（存在 created_at 上，见
@@ -427,13 +440,26 @@ function EditorContentComponent() {
           // 只按它排的话 Postgres 每次返回的先后都能不一样，前台页签会自己跳。
           .order('created_at', { ascending: true })
           .order('id', { ascending: true });
-        
-        let currentPool = catData && catData.length > 0 
-          ? catData.map((c: any) => c.name) 
-          : ['AI', 'Tech', 'Gaming'];
 
-        if (articleId && editor && !hasLoadedRef.current) {
-          hasLoadedRef.current = true;
+        // 读失败必须说出来。
+        // 以前这里只取 `data`、把 `error` 吞掉，然后默默换成 `['AI','Tech','Gaming']`
+        // 三个**库里根本不存在**的话题 —— 站长看到的就是「我新加的话题没同步」，
+        // 其实是这一次查询被 RLS / 网络打回来了。现在照实报错，并且只把本文
+        // 自己已有的话题补进来（下面那段），一个字都不凭空造。
+        if (catError) {
+          console.error('[categories] 话题矩阵读取失败：', catError.message);
+          showToast(
+            `话题矩阵没读到（${catError.message}）—— 下面只剩本文已有的话题，先别在这里判断「有没有同步」`,
+            'error'
+          );
+        }
+
+        let currentPool: string[] = (catData || [])
+          .map((c: any) => String(c?.name || '').trim())
+          .filter(Boolean);
+
+        if (articleId && editor && loadedArticleIdRef.current !== articleId) {
+          loadedArticleIdRef.current = articleId;
           const { data, error } = await supabase.from('articles').select('*').eq('id', articleId).single();
           if (error) throw error;
           if (data) {
@@ -1029,7 +1055,7 @@ function EditorContentComponent() {
    */
   const removeCat = async (cat: string) => {
     const confirmed = window.confirm(
-      `删除话题「${cat}」后，它会从所有文章的 tags 里移除；只有这个话题的文章会并进「Other」。确定删除吗？`
+      `删除话题「${cat}」后，它会从所有简报的话题里移除；只挂着这个话题的简报会并进「Other」。确定删除吗？`
     );
     if (!confirmed) return;
 
@@ -1078,17 +1104,103 @@ function EditorContentComponent() {
     void persistCatOrder(next, previous);
   };
 
-  const handleAddNewCatClick = () => {
+  /**
+   * 新增话题 —— **先落库，再上界面**。
+   *
+   * 以前这里只有 `setState`：话题只活在当前这个标签页里，要等「保存这篇文章」
+   * 时才由 `upsertCategories` 顺手补进 `categories` 表，而补写失败只打一行
+   * console.log。于是站长在 A 加的话题，去编辑 B 时根本看不到 —— 这就是
+   * 「新增的话题没有同步」的根子。现在走 /api/admin/categories/create：
+   * 失败会红字说原因，成功则**立刻**是全站共用的（新建稿 / 老稿 / 前台都读这张表）。
+   */
+  const handleAddNewCatClick = async () => {
     const trimmed = newCatInput.trim();
-    if (!trimmed) return;
-    if (availableCats.some(c => c.toLowerCase() === trimmed.toLowerCase())) {
-      showToast('该话题分类已存在', 'error');
-      return;
+    // 这里**故意不拦**「已经存在」：本页的话题池里除了矩阵里的话题，还混着
+    // 「只属于本文、从没进过矩阵」的历史名字（线上就有：两篇草稿挂着 `AI`）。
+    // 在本地拦掉它，站长就永远没法把这种名字补进矩阵了。查重交给服务端
+    // （它读的是真表，幂等：已存在就返回库里那个写法）。
+    if (!trimmed || addingCat) return;
+
+    setAddingCat(true);
+    try {
+      const token = await getFreshAccessToken();
+      if (!token) throw new Error('登录状态失效，请刷新页面重新登录');
+      const resp = await fetch('/api/admin/categories/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      const json = await resp.json().catch(() => ({}));
+      if (!resp.ok || !json?.ok) throw new Error(json?.error || `新增话题失败（${resp.status}）`);
+
+      // 用服务端回给的名字（可能是库里已有的另一种写法，例如输入 sports → 已有 Sports）
+      const saved = String(json?.category?.name || trimmed);
+      setAvailableCats(prev => (prev.some(c => c.toLowerCase() === saved.toLowerCase()) ? prev : [...prev, saved]));
+      setSelectedCats(prev => (prev.some(c => c.toLowerCase() === saved.toLowerCase()) ? prev : [...prev, saved]));
+      setNewCatInput('');
+      showToast(
+        json?.existed
+          ? `「${saved}」矩阵里已经有了，已帮你选中`
+          : `「${saved}」已存进话题矩阵，${
+              json?.frontend?.ok ? '前台已同步刷新' : '前台最多一分钟后更新'
+            }`,
+        'success'
+      );
+    } catch (e: any) {
+      // 关键：失败时**不往界面上加**。加了一半再刷新就没了，比报错更让人迷路。
+      showToast(e?.message || '新增话题失败', 'error');
+    } finally {
+      setAddingCat(false);
     }
-    setAvailableCats(prev => [...prev, trimmed]);
-    setSelectedCats(prev => prev.some(c => c.toLowerCase() === trimmed.toLowerCase()) ? prev : [...prev, trimmed]);
-    setNewCatInput('');
-    showToast('新话题已加入矩阵并选中', 'success');
+  };
+
+  /**
+   * 给话题改名（矩阵那一行 + 所有简报一起改）。
+   *
+   * 为什么不做成「删掉旧的再建个新的」：删话题会把名下文章全部并进兜底话题
+   * `Other`，一百多篇的主话题一次全丢。改名要保住这些文章，所以走
+   * /api/admin/categories/rename（服务端逐篇把旧名字换掉，保留主话题位）。
+   */
+  const renameCat = async (cat: string) => {
+    if (renamingCat) return;
+    const input = window.prompt(
+      `把话题「${cat}」改成：\n（所有挂着这个话题的简报会一起改，主话题位不变）`,
+      cat
+    );
+    if (input === null) return;
+    const next = input.trim();
+    if (!next || next === cat) return;
+    // 撞名交给服务端判断（它读的是真表，会回一句「矩阵里已经有 XXX」）——
+    // 本地池子里混着「只属于本文、还没进矩阵」的历史名字，在本地拦容易误伤。
+
+    setRenamingCat(cat);
+    try {
+      const token = await getFreshAccessToken();
+      if (!token) throw new Error('登录状态失效，请刷新页面重新登录');
+      const resp = await fetch('/api/admin/categories/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ from: cat, to: next }),
+      });
+      const json = await resp.json().catch(() => ({}));
+      if (!resp.ok || !json?.ok) throw new Error(json?.error || `改名失败（${resp.status}）`);
+
+      const saved = String(json?.to || next);
+      setAvailableCats(prev => prev.map(c => (c === cat ? saved : c)));
+      setSelectedCats(prev => prev.map(c => (c === cat ? saved : c)));
+      const updated = Number(json?.updated) || 0;
+      const where = json?.frontend?.ok ? '，前台已同步刷新' : '，前台最多一分钟后更新';
+      showToast(
+        updated > 0
+          ? `「${cat}」已改名为「${saved}」，${updated} 篇简报跟着改了${where}`
+          : `「${cat}」已改名为「${saved}」${where}`,
+        'success'
+      );
+    } catch (e: any) {
+      showToast(e?.message || '改名失败', 'error');
+    } finally {
+      setRenamingCat(null);
+    }
   };
 
   const handleSave = async () => {
@@ -1235,6 +1347,14 @@ function EditorContentComponent() {
       }
       if (writeResult.error) throw writeResult.error;
 
+      // 文章先落库，**再**补话题（顺序不能反：先补话题再写文章，中途失败就会
+      // 留下「后台矩阵有、文章没有」的孤儿话题 —— 见 upsertCategories 的注释）。
+      //
+      // 新增话题现在由 /api/admin/categories/create 当场落库（见 handleAddNewCatClick），
+      // 这里只剩「历史遗留的名字」兜底：某个话题是老版本在台上敲出来、还没进库的。
+      // 放在 toast 之前：补写失败要能在站长离开这一页之前发生。
+      await upsertCategories(supabase, selectedCats);
+
       lastSavedZhRef.current = { html: zhHtmlNow, title: draft.titleZh, excerpt: draft.excerptZh };
       if (zhChanged) setZhUpdatedAt(currentIsoTime);
       if (categoriesDropped) {
@@ -1246,10 +1366,6 @@ function EditorContentComponent() {
       }
       setTimeout(() => router.push('/admin/trends'), categoriesDropped ? 2800 : 1200);
 
-      // 走到这里说明文章确实写进库了 —— 现在才补话题、才通知前台刷新。
-      // 顺序不能反：先补话题再写文章，中途失败就会留下「后台矩阵有、文章没有」
-      // 的孤儿话题（见 upsertCategories 的注释）。
-      await upsertCategories(supabase, selectedCats);
       await pingFrontendRevalidate(token);
     } catch (e: any) {
       const msg = String(e?.message || '');
@@ -1289,8 +1405,8 @@ function EditorContentComponent() {
         <div className="flex items-center gap-6">
           <Link href="/admin/trends" className="w-10 h-10 flex items-center justify-center rounded-2xl bg-white border border-slate-100 hover:shadow-xl transition-all"><ArrowLeft size={18} /></Link>
           <div className="hidden sm:block">
-            <h1 className="text-lg font-black italic uppercase leading-none tracking-tighter text-left">ComeBrief Studio</h1>
-            <p className="text-[8px] font-black text-slate-400 uppercase tracking-[0.3em] mt-1 italic text-left">内容创作指挥部</p>
+            <h1 className="text-lg font-black italic leading-none tracking-tighter text-left">ComeBrief Studio</h1>
+            <p className="text-[8px] font-black text-slate-400 tracking-[0.3em] mt-1 italic text-left">内容创作指挥部</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -1298,14 +1414,14 @@ function EditorContentComponent() {
              type="button"
              onClick={() => setComposerOpen(true)}
              title="选标签，让 AI 写一篇中文短篇"
-             className="h-12 px-6 bg-white border border-slate-200 text-slate-700 rounded-2xl font-black text-[10px] uppercase flex items-center gap-2 hover:border-indigo-300 hover:text-indigo-600 transition-all"
+             className="h-12 px-6 bg-white border border-slate-200 text-slate-700 rounded-2xl font-black text-[10px] flex items-center gap-2 hover:border-indigo-300 hover:text-indigo-600 transition-all"
            >
              <Sparkles size={14} className="text-indigo-500" /> AI 创作
            </button>
            <button 
              onClick={handleSave}
              disabled={saving}
-             className={`h-12 px-10 text-white rounded-2xl font-black text-[10px] uppercase shadow-2xl bg-slate-900 flex items-center gap-3 transition-all ${saving ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105'}`}>
+             className={`h-12 px-10 text-white rounded-2xl font-black text-[10px] shadow-2xl bg-slate-900 flex items-center gap-3 transition-all ${saving ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105'}`}>
              {saving ? <Loader2 size={14} className="animate-spin" /> : btnConfig.icon} 
              {btnConfig.label}
            </button>
@@ -1333,7 +1449,7 @@ function EditorContentComponent() {
         <button
           type="button"
           onClick={() => switchLang('zh')}
-          className={`px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
+          className={`px-5 py-2.5 rounded-xl text-[10px] font-black tracking-wider transition-all ${
             lang === 'zh' ? 'bg-white text-slate-900 shadow' : 'text-slate-400 hover:text-slate-600'
           }`}
         >
@@ -1342,7 +1458,7 @@ function EditorContentComponent() {
         <button
           type="button"
           onClick={() => switchLang('en')}
-          className={`px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-2 transition-all ${
+          className={`px-5 py-2.5 rounded-xl text-[10px] font-black tracking-wider flex items-center gap-2 transition-all ${
             lang === 'en' ? 'bg-white text-slate-900 shadow' : 'text-slate-400 hover:text-slate-600'
           }`}
         >
@@ -1355,7 +1471,7 @@ function EditorContentComponent() {
         type="button"
         onClick={() => handleTranslate()}
         disabled={translating}
-        className={`h-10 px-5 rounded-2xl text-[10px] font-black uppercase tracking-wider flex items-center gap-2 transition-all ${
+        className={`h-10 px-5 rounded-2xl text-[10px] font-black tracking-wider flex items-center gap-2 transition-all ${
           translating ? 'bg-slate-100 text-slate-400' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
         }`}
       >
@@ -1387,12 +1503,12 @@ function EditorContentComponent() {
     
     <div className="space-y-2">
       <div className="flex justify-between items-center px-4">
-        <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">{lang === 'zh' ? '中文摘要 (EXCERPT_ZH)' : '文章摘要 (EXCERPT · 前台显示)'}</label>
+        <label className="text-[10px] font-black tracking-widest text-slate-400">{lang === 'zh' ? '中文摘要 (EXCERPT_ZH)' : '文章摘要 (EXCERPT · 前台显示)'}</label>
         <button 
           type="button" 
           onClick={handleAutoExtractExcerpt}
           disabled={extractingExcerpt}
-          className="flex items-center gap-1.5 text-[9px] font-black uppercase text-indigo-500 hover:text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full transition-all hover:scale-105"
+          className="flex items-center gap-1.5 text-[9px] font-black text-indigo-500 hover:text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full transition-all hover:scale-105"
         >
           {extractingExcerpt ? <Loader2 size={11} className="animate-spin"/> : <Sparkles size={11}/>} {extractingExcerpt ? '正在写摘要…' : 'AI 一键生成摘要'}
         </button>
@@ -1481,7 +1597,7 @@ function EditorContentComponent() {
           <AiHealthCard />
           {/* 发布策略中心 */}
           <section className="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm transition-all hover:shadow-md">
-            <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-400 mb-6 italic flex items-center gap-2 text-left">发布策略 (Strategy) <Clock size={14}/></h3>
+            <h3 className="text-[10px] font-black tracking-[0.4em] text-slate-400 mb-6 italic flex items-center gap-2 text-left">发布策略 (Strategy) <Clock size={14}/></h3>
             <div className="flex flex-col gap-5">
               <div className="grid grid-cols-3 gap-2 p-1.5 bg-slate-50 rounded-2xl border border-slate-100">
                 {(['draft', 'published', 'scheduled'] as const).map((status) => (
@@ -1489,7 +1605,7 @@ function EditorContentComponent() {
                     key={status}
                     type="button"
                     onClick={() => setPostStatus(status)}
-                    className={`py-3 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all ${postStatus === status ? 'bg-slate-900 text-white shadow-md scale-102' : 'text-slate-400 hover:text-slate-600'}`}
+                    className={`py-3 rounded-xl text-[9px] font-black tracking-wider transition-all ${postStatus === status ? 'bg-slate-900 text-white shadow-md scale-102' : 'text-slate-400 hover:text-slate-600'}`}
                   >
                     {status === 'draft' ? '草稿' : status === 'published' ? '发布' : '定时'}
                   </button>
@@ -1498,7 +1614,7 @@ function EditorContentComponent() {
 
               {postStatus === 'scheduled' && (
                 <div className="space-y-2 p-5 bg-indigo-50/40 rounded-3xl border border-indigo-50 animate-in slide-in-from-top-3 duration-200 text-left">
-                  <label className="text-[8px] font-black uppercase tracking-widest text-indigo-500 block ml-1">选择海外发射时间 (Local Time)</label>
+                  <label className="text-[8px] font-black tracking-widest text-indigo-500 block ml-1">选择海外发射时间 (Local Time)</label>
                   <input
                     type="datetime-local"
                     value={scheduledAt}
@@ -1512,14 +1628,14 @@ function EditorContentComponent() {
           
           {/* 运营配置 */}
           <section className="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm transition-all hover:shadow-md">
-             <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-400 mb-8 italic flex items-center gap-2 text-left">运营配置 <TrendingUp size={14}/></h3>
+             <h3 className="text-[10px] font-black tracking-[0.4em] text-slate-400 mb-8 italic flex items-center gap-2 text-left">运营配置 <TrendingUp size={14}/></h3>
              <div className="grid grid-cols-2 gap-4">
                {availableLabels.map(label => (
                  <button 
                    type="button"
                    key={label.id} 
                    onClick={() => toggleLabel(label.id)} 
-                   className={`flex items-center justify-center gap-2 px-4 py-5 rounded-[28px] text-[9px] font-black uppercase transition-all border ${selectedLabels.includes(label.id) ? `${label.color} border-current shadow-lg scale-95` : 'bg-slate-50 text-slate-400 border-transparent hover:bg-slate-100'}`}
+                   className={`flex items-center justify-center gap-2 px-4 py-5 rounded-[28px] text-[9px] font-black transition-all border ${selectedLabels.includes(label.id) ? `${label.color} border-current shadow-lg scale-95` : 'bg-slate-50 text-slate-400 border-transparent hover:bg-slate-100'}`}
                  >
                    {label.icon} {label.name}
                  </button>
@@ -1530,8 +1646,20 @@ function EditorContentComponent() {
           {/* 话题矩阵 (Categories) */}
           <section className="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm">
              <div className="flex justify-between items-center mb-8">
-               <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-400 italic text-left">话题矩阵</h3>
-               <button type="button" onClick={() => setIsEditingCats(!isEditingCats)} className="text-slate-400 hover:text-indigo-600 transition-colors"><Plus size={16}/></button>
+               <h3 className="text-[10px] font-black tracking-[0.4em] text-slate-400 italic text-left">话题矩阵</h3>
+               {/* 入口写清楚：这个按钮以前只有一个小加号，站长根本不知道
+                   话题的增 / 删 / 改名都藏在它后面（于是以为「后台只能选、不能管」）。 */}
+               <button
+                 type="button"
+                 onClick={() => setIsEditingCats(!isEditingCats)}
+                 title={isEditingCats ? '退出编辑：回到只勾选话题' : '管理话题：新增 / 改名 / 删除（全站生效）'}
+                 className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[9px] font-black tracking-widest transition-all ${
+                   isEditingCats ? 'bg-slate-900 text-white' : 'bg-slate-50 text-slate-400 hover:text-indigo-600'
+                 }`}
+               >
+                 {isEditingCats ? <Check size={12}/> : <Plus size={12}/>}
+                 {isEditingCats ? '完成' : '管理话题'}
+               </button>
              </div>
              <div className="flex flex-wrap gap-2 mb-3 justify-start">
                 {availableCats.map(cat => {
@@ -1562,7 +1690,7 @@ function EditorContentComponent() {
                       onDragEnd={() => { setDraggingCat(null); setDragOverCat(null); }}
                       onClick={() => toggleCat(cat)} 
                       title="点一下加入 / 移出；第一个选中的是主话题；按住拖动可以调整页签顺序"
-                      className={`px-5 py-2.5 rounded-[18px] text-[9px] font-black uppercase tracking-widest transition-all ${
+                      className={`px-5 py-2.5 rounded-[18px] text-[9px] font-black tracking-widest transition-all ${
                         selectedCats.includes(cat) ? 'bg-slate-900 text-white shadow-xl scale-105' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'
                       } ${isDragging ? 'opacity-40 cursor-grabbing' : 'cursor-grab'} ${
                         isDropTarget ? 'ring-2 ring-indigo-400 ring-offset-2 scale-105' : ''
@@ -1579,6 +1707,21 @@ function EditorContentComponent() {
                     </button>
                     {/* 兜底话题「Other」不给删：其他话题的文章都要并进它
                         （服务端 app/api/admin/categories/delete 也会拦一道） */}
+                    {/* 编辑模式下每个话题多两个小按钮：
+                        左上「铅笔」= 改名（矩阵 + 所有简报一起改），
+                        右上「−」= 删除（名下简报并进 Other，见 removeCat）。
+                        兜底话题「Other」两个都不给 —— 它是收容所。 */}
+                    {isEditingCats && cat.toLowerCase() !== 'other' && (
+                      <button
+                        type="button"
+                        onClick={() => void renameCat(cat)}
+                        disabled={Boolean(renamingCat)}
+                        title={`重命名「${cat}」：所有挂着它的简报会一起改`}
+                        className="absolute -top-1 -left-1 w-5 h-5 bg-indigo-500 text-white rounded-full flex items-center justify-center shadow-lg hover:scale-110 z-10 disabled:opacity-50"
+                      >
+                        {renamingCat === cat ? <Loader2 size={10} className="animate-spin" /> : <Pencil size={9}/>}
+                      </button>
+                    )}
                     {isEditingCats && cat.toLowerCase() !== 'other' && (
                       <button 
                         type="button"
@@ -1594,17 +1737,28 @@ function EditorContentComponent() {
              </div>
              <p className="mb-8 text-[9px] font-bold tracking-wider text-slate-300 text-left">
                可多选：第一个选中的是主话题，卡片显示「主话题 +N」。拖动标签调整的是前台页签的先后顺序。
+               <br />
+               这份矩阵是「全站共用」的：新建稿和编辑老稿看到的是同一份。点右上「+」进编辑模式 →
+               这里敲的新话题、每个标签左上的铅笔（改名）、右上「−」（删除）都会立刻落库，对所有简报生效。
              </p>
              {isEditingCats && (
                <div className="flex gap-2 animate-in slide-in-from-top-2">
-                 <input 
-                   value={newCatInput} 
-                   onChange={e => setNewCatInput(e.target.value)} 
-                   onKeyDown={e => e.key === 'Enter' && handleAddNewCatClick()}
-                   placeholder="新增话题..." 
-                   className="flex-1 px-5 py-3 bg-slate-50 rounded-2xl text-[10px] font-black outline-none border-transparent focus:border-indigo-500 transition-all" 
+                 <input
+                   value={newCatInput}
+                   onChange={e => setNewCatInput(e.target.value)}
+                   onKeyDown={e => { if (e.key === 'Enter') void handleAddNewCatClick(); }}
+                   placeholder="新增话题..."
+                   className="flex-1 px-5 py-3 bg-slate-50 rounded-2xl text-[10px] font-black outline-none border-transparent focus:border-indigo-500 transition-all"
                  />
-                 <button type="button" onClick={handleAddNewCatClick} className="w-12 h-12 bg-emerald-500 text-white rounded-2xl flex items-center justify-center shadow-md"><Check size={20}/></button>
+                 <button
+                   type="button"
+                   onClick={() => void handleAddNewCatClick()}
+                   disabled={addingCat}
+                   title="存进话题矩阵（立刻对所有简报生效）"
+                   className="w-12 h-12 bg-emerald-500 text-white rounded-2xl flex items-center justify-center shadow-md disabled:opacity-50"
+                 >
+                   {addingCat ? <Loader2 size={18} className="animate-spin" /> : <Check size={20}/>}
+                 </button>
                </div>
              )}
           </section>
@@ -1612,9 +1766,9 @@ function EditorContentComponent() {
           {/* 视觉封面 (Cover)：本地上传 + AI 生成（AI 只在没有封面时自动补） */}
           <section className="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm group">
             <div className="flex items-center justify-between gap-3 mb-6">
-              <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-400 italic text-left">视觉封面 (Cover)</h3>
+              <h3 className="text-[10px] font-black tracking-[0.4em] text-slate-400 italic text-left">视觉封面 (Cover)</h3>
               {generatingCover && (
-                <span className="inline-flex items-center gap-1.5 text-[8px] font-black uppercase tracking-widest text-cyan-500">
+                <span className="inline-flex items-center gap-1.5 text-[8px] font-black tracking-widest text-cyan-500">
                   <Loader2 size={11} className="animate-spin" /> AI 绘制中
                 </span>
               )}
@@ -1627,14 +1781,14 @@ function EditorContentComponent() {
                     <button
                       type="button"
                       onClick={clearCover}
-                      className="bg-white text-slate-900 px-6 py-2 rounded-full text-[9px] font-black uppercase shadow-xl hover:scale-110 active:scale-95 transition-all"
+                      className="bg-white text-slate-900 px-6 py-2 rounded-full text-[9px] font-black shadow-xl hover:scale-110 active:scale-95 transition-all"
                     >
                       移除
                     </button>
                     <button
                       type="button"
                       onClick={() => coverFileInputRef.current?.click()}
-                      className="bg-cyan-500 text-white px-6 py-2 rounded-full text-[9px] font-black uppercase shadow-xl hover:scale-110 active:scale-95 transition-all"
+                      className="bg-cyan-500 text-white px-6 py-2 rounded-full text-[9px] font-black shadow-xl hover:scale-110 active:scale-95 transition-all"
                     >
                       {uploading ? "传输中..." : "更换"}
                     </button>
@@ -1644,7 +1798,7 @@ function EditorContentComponent() {
                   type="button"
                   onClick={() => void runCoverGeneration()}
                   disabled={generatingCover || uploading}
-                  className="mt-3 w-full h-10 rounded-2xl bg-slate-900 text-white text-[9px] font-black uppercase tracking-widest inline-flex items-center justify-center gap-2 hover:bg-cyan-600 transition-all disabled:opacity-50"
+                  className="mt-3 w-full h-10 rounded-2xl bg-slate-900 text-white text-[9px] font-black tracking-widest inline-flex items-center justify-center gap-2 hover:bg-cyan-600 transition-all disabled:opacity-50"
                 >
                   {generatingCover ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
                   {generatingCover ? '正在重绘…' : 'AI 重绘封面'}
@@ -1657,7 +1811,7 @@ function EditorContentComponent() {
                 ) : (
                   <>
                     <ImageIcon size={30} className="text-slate-200" />
-                    <span className="text-[9px] font-black uppercase text-slate-300 italic">还没有封面</span>
+                    <span className="text-[9px] font-black text-slate-300 italic">还没有封面</span>
                   </>
                 )}
               </div>
@@ -1668,7 +1822,7 @@ function EditorContentComponent() {
                 type="button"
                 onClick={() => coverFileInputRef.current?.click()}
                 disabled={uploading || generatingCover}
-                className="h-10 rounded-2xl border border-slate-200 text-slate-500 text-[9px] font-black uppercase tracking-wider inline-flex items-center justify-center gap-1.5 hover:border-cyan-400 hover:text-cyan-600 transition-all disabled:opacity-50"
+                className="h-10 rounded-2xl border border-slate-200 text-slate-500 text-[9px] font-black tracking-wider inline-flex items-center justify-center gap-1.5 hover:border-cyan-400 hover:text-cyan-600 transition-all disabled:opacity-50"
               >
                 <Upload size={12} /> 本地上传
               </button>
@@ -1676,7 +1830,7 @@ function EditorContentComponent() {
                 type="button"
                 onClick={() => void runCoverGeneration()}
                 disabled={uploading || generatingCover}
-                className="h-10 rounded-2xl bg-cyan-50 text-cyan-600 text-[9px] font-black uppercase tracking-wider inline-flex items-center justify-center gap-1.5 hover:bg-cyan-100 transition-all disabled:opacity-50"
+                className="h-10 rounded-2xl bg-cyan-50 text-cyan-600 text-[9px] font-black tracking-wider inline-flex items-center justify-center gap-1.5 hover:bg-cyan-100 transition-all disabled:opacity-50"
               >
                 {generatingCover ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
                 AI 生成
@@ -1697,12 +1851,12 @@ function EditorContentComponent() {
           {/* 发布身份 */}
           <section className="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm">
              <div className="flex justify-between items-center mb-8">
-               <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-400 italic text-left">发布身份</h3>
+               <h3 className="text-[10px] font-black tracking-[0.4em] text-slate-400 italic text-left">发布身份</h3>
                <div className="flex items-center gap-2">
                  <button
                    type="button"
                    onClick={() => setAuthorPickerOpen((v) => !v)}
-                   className={`px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${
+                   className={`px-3 py-2 rounded-xl text-[9px] font-black tracking-widest transition-all ${
                      authorPickerOpen ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                    }`}
                  >
@@ -1720,7 +1874,7 @@ function EditorContentComponent() {
                      placeholder="署名"
                      className="w-full bg-transparent font-black text-slate-900 text-sm truncate outline-none border-b border-transparent focus:border-indigo-200 transition-all"
                    />
-                   <p className="text-[8px] font-black text-indigo-500 uppercase tracking-widest mt-1 italic">Verified Partner</p>
+                   <p className="text-[8px] font-black text-indigo-500 tracking-widest mt-1 italic">Verified Partner</p>
                 </div>
              </div>
 
@@ -1745,7 +1899,7 @@ function EditorContentComponent() {
                          <img src={persona.avatar} alt="" className="w-9 h-9 rounded-full bg-slate-100 shrink-0" />
                          <span className="min-w-0">
                            <span className="block text-[11px] font-black text-slate-800 truncate">{persona.name}</span>
-                           <span className="block text-[8px] font-bold text-slate-400 uppercase tracking-wider truncate">{persona.role}</span>
+                           <span className="block text-[8px] font-bold text-slate-400 tracking-wider truncate">{persona.role}</span>
                          </span>
                        </button>
                      );
@@ -1777,7 +1931,7 @@ function EditorContentComponent() {
               <button
                 type="button"
                 onClick={() => { setPublishGuard(false); switchLang('zh'); handleTranslate({ activeLang: 'zh' }); }}
-                className="h-14 rounded-2xl bg-slate-900 text-white font-black text-[11px] uppercase tracking-widest hover:scale-[1.01] active:scale-95 transition-all flex items-center justify-center gap-2"
+                className="h-14 rounded-2xl bg-slate-900 text-white font-black text-[11px] tracking-widest hover:scale-[1.01] active:scale-95 transition-all flex items-center justify-center gap-2"
               >
                 <Languages size={15} /> 先去翻译（推荐）
               </button>
@@ -1785,14 +1939,14 @@ function EditorContentComponent() {
                 <button
                   type="button"
                   onClick={() => { setPublishGuard(false); guardOverrideRef.current = true; handleSave(); }}
-                  className="flex-1 h-12 rounded-2xl border border-rose-200 text-rose-500 font-black text-[10px] uppercase tracking-widest hover:bg-rose-50 transition-all"
+                  className="flex-1 h-12 rounded-2xl border border-rose-200 text-rose-500 font-black text-[10px] tracking-widest hover:bg-rose-50 transition-all"
                 >
                   仍然发布
                 </button>
                 <button
                   type="button"
                   onClick={() => setPublishGuard(false)}
-                  className="flex-1 h-12 rounded-2xl border border-slate-200 text-slate-400 font-black text-[10px] uppercase tracking-widest hover:bg-slate-50 transition-all"
+                  className="flex-1 h-12 rounded-2xl border border-slate-200 text-slate-400 font-black text-[10px] tracking-widest hover:bg-slate-50 transition-all"
                 >
                   取消
                 </button>
@@ -1821,7 +1975,7 @@ function EditorContentComponent() {
 
 export default function UltimateFixedEditor() {
   return (
-    <Suspense fallback={<div className="h-screen flex items-center justify-center bg-white font-black italic uppercase text-slate-300 animate-pulse tracking-[0.5em]">Synchronizing Studio Matrix...</div>}>
+    <Suspense fallback={<div className="h-screen flex items-center justify-center bg-white font-black italic text-slate-300 animate-pulse tracking-[0.5em]">Synchronizing Studio Matrix...</div>}>
       <EditorContentComponent />
     </Suspense>
   )
