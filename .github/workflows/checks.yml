@@ -1,0 +1,62 @@
+name: Checks
+
+# 后台仓库的静态检查。跑的是「不需要网络、不需要数据库、不需要密钥」的三件事，
+# 所以可以在 PR 上无条件绿灯/红灯，不会因为额度或凭据缺席变成噪音。
+#
+#   typecheck   —— tsc --noEmit
+#   check:quiz  —— scripts/check-quiz.mjs：axes 卷的 38 条断言（全枚举 / 12 项检查 / 仲裁）
+#   check:pack  —— scripts/p13-quiz-pack-check.mts：批量导入的解析 / 校验 / 归一化（含 axes）
+#
+# 为什么 check:quiz 必须进 CI：
+#   axes 模型的「某个原型再也抽不到」是一类**静默**故障 —— 页面照常渲染，
+#   只是永远给出同几个结果。只有把 65,536 种组合全枚举一遍才看得见，
+#   而人评审时不会去算。把它钉在 CI 上，改卷的人才必须面对它。
+#
+# 为什么这里**不**跑 `npm run lint`：
+#   仓库里现存 6 个 eslint error（app/admin/(protected)/trends 等页面的
+#   setState-in-effect / 未转义引号），与本模块无关。把它塞进 CI 只会让
+#   每条 PR 天生红灯，红灯就不再传递信号了。等那 6 个修掉再加这一步
+#   —— 单独跑 `npx eslint <改动的文件>` 仍然有用，新代码是零 warning 的。
+#
+# 需要 Node ≥ 24：脚本直接 import '../lib/quizAxes.ts'，靠 Node 原生剥类型
+# （不需要 --import ./scripts/_ts-resolve.mts，因为 quizAxes.ts 零依赖）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # next build / tsc 在 CI 里不该碰到真项目；这里只做类型检查与脚本断言，
+      # 但仍然备一组明显的占位值，防止某个 import 顺手读了 process.env 就炸。
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Quiz axes checks
+        run: npm run check:quiz
+
+      # 导入链路的断言（模板能过校验 / 三类脏输入 / axes 卷的 blocker 与 CI 同源）。
+      # 它不联网也不碰数据库，所以和 check:quiz 一样可以无条件绿灯。
+      - name: Quiz pack checks
+        run: npm run check:pack

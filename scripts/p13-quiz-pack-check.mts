@@ -15,6 +15,7 @@ import {
   normalizePack,
   reachableRange,
   rewritePackText,
+  summarizePack,
   validatePack,
 } from '../lib/quizPack.ts'
 
@@ -118,6 +119,80 @@ check('7d 空白文本 → 老实报错', inspectPackText('   \n  ').ok === fals
 const formatted = formatPackText('{"title":"x","questions":[]}')
 check('8a 格式化成功且是 2 空格缩进', formatted.ok === true && formatted.ok && formatted.text.includes('\n  "title"'))
 check('8b 格式化失败时给出行列', formatPackText('{"title": }').ok === false)
+
+/* 9. axes 卷（原型矩阵）：没有 results，判据必须和 lib/quizAxes 一致 */
+const axePack = (over: Record<string, any> = {}) => ({
+  title: '你是哪种线上人格',
+  model: 'axes',
+  archetypes: [
+    { id: 'sarcastic', name: 'The Sarcastic Meme Curator' },
+    { id: 'observer', name: 'The Calm Observer' },
+  ],
+  questions: [
+    {
+      id: 'q1',
+      scene: 'Monday, 9:03 AM',
+      title: '群聊在早上九点炸了，你…',
+      options: [
+        { id: 'a', text: '四秒内回一张梗图', weights: { sarcastic: 3 } },
+        { id: 'b', text: '全看完，一个字不说', weights: { sarcastic: 1 } },
+      ],
+    },
+  ],
+  ...over,
+})
+
+const axeOk = validatePack(axePack())
+check(
+  '9a axes 不再被当成未知模型（没有 model 的 blocker）',
+  !axeOk.some((i) => i.path === 'model' && i.level === 'blocker')
+)
+check(
+  '9b axes 不要求 results（不会报缺 results）',
+  !axeOk.some((i) => i.path === 'results')
+)
+check(
+  '9c 抽不到的原型是 blocker，落在 (check:reachable)',
+  axeOk.some((i) => i.path === '(check:reachable)' && i.level === 'blocker')
+)
+check(
+  '9d 题量不足只是 warning（不会拦住存草稿）',
+  axeOk.some((i) => i.path === '(check:shape)' && i.level === 'warning')
+)
+
+const axeSameName = validatePack(
+  axePack({ archetypes: [{ id: 'a', name: '同名' }, { id: 'b', name: '同名' }] })
+)
+check(
+  '9e 两个原型同名是 blocker（与 axeChecks 同一份规则）',
+  axeSameName.some((i) => i.path === '(check:nameunique)' && i.level === 'blocker')
+)
+
+check(
+  '9f questions 不是数组 → 老实报错',
+  validatePack(axePack({ questions: 'oops' })).some((i) => i.path === 'questions' && i.level === 'blocker')
+)
+
+const axeNorm = normalizePack(axePack())
+check(
+  '9g 归一化保留 archetypes + weights，不塞 score/tag',
+  axeNorm.model === 'axes' &&
+    axeNorm.archetypes.length === 2 &&
+    axeNorm.questions[0].options[0].weights.sarcastic === 3 &&
+    axeNorm.questions[0].options[0].score === undefined &&
+    axeNorm.questions[0].options[0].tag === undefined &&
+    axeNorm.results === undefined
+)
+
+const axeSummary = summarizePack(axeNorm)
+check(
+  '9h 摘要：结果数 = 原型数，分数区间为 null',
+  axeSummary.model === 'axes' &&
+    axeSummary.resultCount === 2 &&
+    axeSummary.questionCount === 1 &&
+    axeSummary.minScore === null &&
+    axeSummary.maxScore === null
+)
 
 console.log(failed === 0 ? '\n全部通过' : `\n${failed} 项失败`)
 process.exit(failed === 0 ? 0 : 1)
