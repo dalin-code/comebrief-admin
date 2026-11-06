@@ -12,7 +12,7 @@ import { signOutAndRedirect } from "@/lib/clientAuth";
 const MENU_ITEMS = [
   { title: "数据概览", path: "/admin", icon: <LayoutDashboard size={18} /> },
   { title: "BRIEFS 简报", path: "/admin/trends", icon: <Zap size={18} /> },
-  { title: "QUIZZES 测试", path: "/admin/quizzes", icon: <BrainCircuit size={18} /> },
+  { title: "QUIZ STUDIO 工作台", path: "/admin/quiz-studio", icon: <BrainCircuit size={18} /> },
   { title: "STORIES 故事", path: "/admin/stories", icon: <ShieldCheck size={18} /> },
   { title: "创作标签", path: "/admin/story-tags", icon: <Tags size={18} /> },
   { title: "写作风格", path: "/admin/story-skills", icon: <PenTool size={18} /> },

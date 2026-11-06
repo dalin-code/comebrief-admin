@@ -1,5 +1,9 @@
 # Quiz Studio 静态稿（v1）
 
+> **2026-11-06 已落地**：真实入口是 `/admin/quiz-studio`，列表 / 行详情 / 三个点菜单 /
+> 矩阵保存 / 分类 / 待放行 / 前台预览都已接真实数据。落地说明见
+> [`docs/quiz-studio.md`](./quiz-studio.md)。本文保留为静态稿的设计记录。
+
 可点原型的唯一入口：`/mockup/quiz-studio`（`npm run dev` → http://localhost:3001/mockup/quiz-studio）。
 
 这份东西**不是功能**，是给「taxonomy / 打分引擎 / 校验 / autopilot」四件事定形状的评审稿。

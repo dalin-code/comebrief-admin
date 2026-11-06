@@ -60,3 +60,8 @@ jobs:
       # 它不联网也不碰数据库，所以和 check:quiz 一样可以无条件绿灯。
       - name: Quiz pack checks
         run: npm run check:pack
+
+      # Quiz Studio 的列表口径：分类归一 / 旧卷健康分 / 复制载荷 / 矩阵 raw_data。
+      # 与后台 /admin/quiz-studio 共用 lib/quizStudio.ts，改坏会在这里先红。
+      - name: Quiz studio checks
+        run: npm run check:studio

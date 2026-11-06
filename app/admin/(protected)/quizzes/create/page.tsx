@@ -311,7 +311,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         postStatus === 'published' ? "已发布上线" : postStatus === 'scheduled' ? "已排入定时队列" : "草稿已保存",
         "success"
       );
-      setTimeout(() => router.push('/admin/quizzes'), 1000);
+      setTimeout(() => router.push('/admin/quiz-studio'), 1000);
     } catch (err: any) {
       showToast(err.message, "error");
     } finally {
@@ -621,7 +621,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         onImported={(count) => {
           showToast(`已创建 ${count} 篇草稿`, "success");
           setShowImportModal(false);
-          setTimeout(() => router.push('/admin/quizzes'), 1000);
+          setTimeout(() => router.push('/admin/quiz-studio'), 1000);
         }}
       />
     </div>

@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "check:quiz": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-quiz.mjs",
     "check:quiz:file": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-quiz.mjs --file",
-    "check:pack": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/_ts-resolve.mts scripts/p13-quiz-pack-check.mts"
+    "check:pack": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/_ts-resolve.mts scripts/p13-quiz-pack-check.mts",
+    "check:studio": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/_ts-resolve.mts scripts/check-quiz-studio.mts"
   },
   "dependencies": {
     "@supabase/auth-js": "^2.102.1",
