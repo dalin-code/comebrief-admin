@@ -21,7 +21,12 @@
  * `scripts/p13-quiz-pack-check.mts` 断言（含「模板本身必须过校验」）。
  */
 
-export type QuizModel = 'score' | 'personality'
+// axes 卷的校验直接复用 lib/quizAxes 的同一份规则（后台导入 / 编辑器右栏 /
+// CI 的 check:quiz 必须同一个判据，否则「本地绿、线上红」只是时间问题）。
+// 无扩展名导入是本项目约定；跑脚本时用 `node --import ./scripts/_ts-resolve.mts`。
+import { axeChecks, enumerateAxe, normalizeAxeQuiz } from './quizAxes'
+
+export type QuizModel = 'score' | 'personality' | 'axes'
 
 export type QuizPackIssue = {
   /** 出错位置：questions[2].options[1].text 这种写法，UI 与文档共用 */
@@ -417,6 +422,43 @@ export function reachableRange(questions: any[]): { min: number; max: number } |
   return { min, max }
 }
 
+/**
+ * axes 卷的导入前体检：结构交 `normalizeAxeQuiz`，可发性交 `axeChecks`。
+ *
+ * 刻意**不**在这里重写一遍权重校验 —— 后台导入、编辑器右栏、CI 的 `check:quiz`
+ * 必须引用同一份规则，否则「本地绿、线上红」只是时间问题。
+ * 两个 blocker（有原型一种组合都抽不到 / 两个原型同名）直接拦住导入；其余
+ * （命中率偏低、平局率高、题量、文案缺项…）只提醒 —— 它们影响体感，但不会
+ * 让一篇卷子坏掉。
+ */
+export function axePackIssues(quiz: any): QuizPackIssue[] {
+  const issues: QuizPackIssue[] = []
+  const add = (path: string, message: string, level: QuizPackIssue['level'] = 'blocker') =>
+    issues.push({ path, message, level })
+
+  const normalized = normalizeAxeQuiz(quiz)
+  if (!normalized) {
+    add('questions', 'model 是 axes，但 questions 不是数组 —— 原型卷至少要有一份题目')
+    return issues
+  }
+
+  // 适配层纠正过的地方（越界权重夹到 0–3、未声明的原型 id 被忽略…）逐条报出来，
+  // 否则导入会「安静地」和作者写的那份 JSON 不一致。
+  normalized.issues.forEach((message) => add('raw_data', `已自动纠正：${message}`, 'warning'))
+
+  const enumeration = enumerateAxe(normalized.quiz)
+  axeChecks(normalized.quiz, enumeration).forEach((check) => {
+    if (check.level === 'ok') return
+    add(
+      `(check:${check.id})`,
+      check.detail ? `${check.label} —— ${check.detail}` : check.label,
+      check.level === 'blocker' ? 'blocker' : 'warning'
+    )
+  })
+
+  return issues
+}
+
 export function validatePack(quiz: any): QuizPackIssue[] {
   const issues: QuizPackIssue[] = []
   const add = (path: string, message: string, level: QuizPackIssue['level'] = 'blocker') =>
@@ -434,8 +476,14 @@ export function validatePack(quiz: any): QuizPackIssue[] {
       ? 'score'
       : quiz.model === 'personality'
         ? 'personality'
-        : null
-  if (model === null) add('model', `model 只能是 "score" 或 "personality"，当前是 ${JSON.stringify(quiz.model)}`)
+        : quiz.model === 'axes'
+          ? 'axes'
+          : null
+  if (model === null)
+    add(
+      'model',
+      `model 只能是 "score" / "personality" / "axes"，当前是 ${JSON.stringify(quiz.model)}`
+    )
 
   if (quiz.categories !== undefined) {
     if (!Array.isArray(quiz.categories)) {
@@ -473,6 +521,10 @@ export function validatePack(quiz: any): QuizPackIssue[] {
   if (quiz.is_limited !== undefined && typeof quiz.is_limited !== 'boolean') {
     add('is_limited', 'is_limited 只能是 true / false', 'warning')
   }
+
+  // axes 卷在这里分叉：它没有 results，选项也没有 score / tag，
+  // 结构和「能不能发」全交给 lib/quizAxes（见 axePackIssues）。
+  if (quiz.model === 'axes') return issues.concat(axePackIssues(quiz))
 
   const questions: any[] = quiz.questions
   if (!Array.isArray(questions) || questions.length === 0) {
@@ -628,6 +680,25 @@ export function validatePack(quiz: any): QuizPackIssue[] {
  */
 export function normalizePack(quiz: any): any {
   const src = isPlainObject(quiz) ? quiz : {}
+
+  // axes 卷原样保留 archetypes / questions（权重是 `{ id: 0-3 }`），只补外层默认值。
+  // 不能走下面那段 score 归一：它会给每个选项塞 score / tag、给每题塞 weight，
+  // 那些字段对原型卷毫无意义，还会让 raw_data 里出现两套互相矛盾的"分数"。
+  if (src.model === 'axes') {
+    const axe = normalizeAxeQuiz(src)
+    return {
+      ...src,
+      title: asText(src.title),
+      model: 'axes' as const,
+      categories: asStringArray(src.categories).length ? asStringArray(src.categories) : [DEFAULT_CATEGORY],
+      tags: asStringArray(src.tags),
+      cover_url: typeof src.cover_url === 'string' ? src.cover_url : '',
+      is_limited: Boolean(src.is_limited),
+      archetypes: axe ? axe.quiz.archetypes : Array.isArray(src.archetypes) ? src.archetypes : [],
+      questions: axe ? axe.quiz.questions : Array.isArray(src.questions) ? src.questions : [],
+    }
+  }
+
   const model: QuizModel = src.model === 'personality' ? 'personality' : 'score'
   const questions: any[] = Array.isArray(src.questions) ? src.questions.filter(isPlainObject) : []
   const results: any[] = Array.isArray(src.results) ? src.results.filter(isPlainObject) : []
@@ -667,12 +738,16 @@ export function normalizePack(quiz: any): any {
 export function summarizePack(quiz: any): QuizPackSummary {
   const questions: any[] = Array.isArray(quiz?.questions) ? quiz.questions : []
   const results: any[] = Array.isArray(quiz?.results) ? quiz.results : []
-  const range = quiz?.model === 'personality' ? null : reachableRange(questions)
+  const archetypes: any[] = Array.isArray(quiz?.archetypes) ? quiz.archetypes : []
+  const isAxe = quiz?.model === 'axes'
+  // axes 卷没有「分数区间」：胜负由仲裁决定，所以 min/max 一律 null，
+  // 列表页会显示「—」而不是一个看起来像分数的 0。
+  const range = isAxe || quiz?.model === 'personality' ? null : reachableRange(questions)
   return {
     title: asText(quiz?.title),
-    model: quiz?.model === 'personality' ? 'personality' : 'score',
+    model: isAxe ? 'axes' : quiz?.model === 'personality' ? 'personality' : 'score',
     questionCount: questions.length,
-    resultCount: results.length,
+    resultCount: isAxe ? archetypes.length : results.length,
     minScore: range ? range.min : null,
     maxScore: range ? range.max : null,
   }
@@ -841,6 +916,7 @@ export const QUIZ_PACK_CHECKLIST: string[] = [
   '必填四项：title / model / questions / results。缺 questions 会导入成功但编辑页白屏。',
   'score 模型：每题 4 个选项，分值 1/2/3/4；结果区间必须从「所有题最小分之和」到「所有题最大分之和」连续铺满，中间不能有缝或重叠。',
   'personality 模型：每个选项写 tag，results 的 min_score / max_score 是「该 tag 被选中的次数」。',
+  'axes 模型（原型矩阵）：没有 results —— 写 archetypes + 每题选项的 weights（0–3）。导入时会全枚举一遍作答组合，「有原型一种组合都抽不到」直接拦下；画矩阵建议用 /admin/quizzes/create 的 Matrix 编辑器。',
   '不要贴 ```json 围栏、不要用中文引号 “ ”、不要尾逗号、不要 // 注释 —— 这几样都能一键修复。',
   '导入进来的一律是草稿（status = draft、active = false），去 /admin/quizzes 点编辑、设时间、再发布。',
 ]

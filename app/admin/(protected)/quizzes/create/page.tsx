@@ -6,11 +6,13 @@ import {
   BarChart3, Image as ImageIcon, Trophy, Type, 
   Calculator, Target, PieChart, Info, Hash, Loader2, 
   CheckCircle2, AlertCircle, X, UploadCloud, Sparkles, Tag, Flame, Star, Zap, Clock, ShieldCheck,
-  Folder, Timer, Edit3, Check
+  Folder, Timer, Edit3, Check, LayoutGrid
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import QuizBatchImport from "@/app/admin/_components/QuizBatchImport";
+import QuizAxesEditor, { blankAxeQuiz } from "@/app/admin/_components/QuizAxesEditor";
+import { auditAxeQuiz, normalizeAxeQuiz, type AxeQuiz } from "@/lib/quizAxes";
 // --- 🚀 AURA 核心：WebP 转码转码引擎 ---
 const compressAndConvertToWebP = (file: File): Promise<File> => {
   return new Promise((resolve, reject) => {
@@ -72,6 +74,9 @@ function QuizEditorContent() {
   const SCORING_MODELS = [
     { id: 'score', name: 'Total Score', desc: 'Sum of all points.', icon: <Calculator size={18}/> },
     { id: 'personality', name: 'Personality', desc: 'Based on tag frequency.', icon: <Target size={18}/> },
+    // axes：0–3 权重矩阵 + 全枚举自检。选中它，中间区会换成矩阵编辑器
+    // （`QuizAxesEditor`），题目/结果两个旧标签页不再适用。
+    { id: 'axes', name: 'Archetype Matrix', desc: '0–3 weights per archetype, verified by full enumeration.', icon: <LayoutGrid size={18}/> },
   ];
 
   // 核心业务数据
@@ -87,6 +92,12 @@ function QuizEditorContent() {
     ],
     results: [{ id: `r${Date.now()}`, min_score: 0, max_score: 10, title: "", description: "" }]
   });
+
+  // axes 卷的正文（原型 + 题目 + 权重表）单独放一份状态：
+  // 它的形状和上面的 `score` / `personality` 载荷完全不同（没有 results、
+  // 选项也没有 score/tag），硬塞进 `quizData` 只会让每个 tab 都多一层判空。
+  // 保存时按 `quizData.model` 二选一写进 `raw_data`。
+  const [axeQuiz, setAxeQuiz] = useState<AxeQuiz>(blankAxeQuiz);
 
 
   const showToast = (msg: string, type: 'success' | 'error') => {
@@ -108,7 +119,34 @@ useEffect(() => {
         if (error) throw error;
         
         if (data?.raw_data) {
-          setQuizData(data.raw_data);
+          // axes 卷要拆成两份状态：正文（原型 / 题目 / 权重）进 `axeQuiz`，
+          // 外层字段（标题 / 分类 / 封面 / 限时）留在 `quizData`。
+          // 不能整块 `setQuizData(raw_data)` —— 它没有 `results`，一进 Results
+          // 标签页就会 `.map` 到 undefined 上白屏。
+          const axe = normalizeAxeQuiz(data.raw_data);
+          if (axe) {
+            setAxeQuiz(axe.quiz);
+            setQuizData((prev) => ({
+              ...prev,
+              title: data.raw_data?.title ?? data?.title ?? prev.title,
+              model: 'axes',
+              categories: Array.isArray(data.raw_data?.categories)
+                ? data.raw_data.categories
+                : Array.isArray(data?.categories)
+                  ? data.categories
+                  : prev.categories,
+              tags: Array.isArray(data.raw_data?.tags) ? data.raw_data.tags : prev.tags,
+              cover_url: data.raw_data?.cover_url ?? data?.cover_url ?? prev.cover_url,
+              is_limited: Boolean(data.raw_data?.is_limited),
+              questions: [],
+              results: [],
+            }));
+            if (axe.issues.length) {
+              showToast(`原型卷有 ${axe.issues.length} 处结构问题已自动纠正：${axe.issues[0]}`, "error");
+            }
+          } else {
+            setQuizData(data.raw_data);
+          }
         }
         // 回填发布策略：状态 / 定时时间 / 主推位
         if (data?.status) setPostStatus(data.status);
@@ -126,7 +164,6 @@ useEffect(() => {
     };
     fetchQuiz();
   }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [editId]);
 
   // --- 功能逻辑 ---
@@ -190,11 +227,41 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
 
     setIsSaving(true);
     try {
+      // axes 卷发布前必须过一遍自检（草稿可以存，草稿不上线）：
+      // 「抽不到的原型 / 盖不满的格子」是 blocker，和 CI 的 check:quiz 同源，
+      // 后台放行就等于让 CI 变成唯一的守门人 —— 但 CI 拦不住手点发布的人。
+      if (quizData.model === 'axes' && postStatus !== 'draft') {
+        const audit = auditAxeQuiz({ ...axeQuiz, model: 'axes' });
+        if (!audit) {
+          return showToast('原型卷结构不完整：需要 archetypes + questions', 'error');
+        }
+        if (audit.blockers.length) {
+          return showToast(`还有 ${audit.blockers.length} 项 blocker：${audit.blockers[0].label}`, 'error');
+        }
+      }
+
       // active 与 status 必须同步维护：
       //   前台按 active 过滤，后台按 status 展示。
       //   只改其中一个，就会出现「后台说已发布、前台看不到」的矛盾。
       //   定时内容先保持不可见，等 cron 到点后一并翻正。
       const isLive = postStatus === 'published';
+
+      // axes 卷的 raw_data 只有一种形状：外层字段 + archetypes + questions。
+      // 旧的 questions / results 绝不能混进去 —— ComeBrief 的 parseQuiz 见到
+      // `model === "axes"` 会走原型分支（多出来的 results 被静默忽略），但下一次
+      // 有人用旧编辑器打开时，那两份互相矛盾的题表会把人带偏。
+      const rawData = quizData.model === 'axes'
+        ? {
+            title: quizData.title,
+            model: 'axes',
+            categories: quizData.categories,
+            tags: quizData.tags,
+            cover_url: quizData.cover_url,
+            is_limited: quizData.is_limited,
+            archetypes: axeQuiz.archetypes,
+            questions: axeQuiz.questions,
+          }
+        : quizData;
 
       const payload: any = {
         title: quizData.title,
@@ -206,7 +273,10 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         scheduled_at: postStatus === 'scheduled' ? new Date(scheduledAt).toISOString() : null,
         is_featured: isFeatured,
         featured_order: isFeatured ? Number(featuredOrder) || 0 : 0,
-        raw_data: quizData
+        // `50_quiz_taxonomy.sql` 里 scoring_mode 允许 axes；列还没跑时下面那段
+        // 「缺列就剔除重试」会把它摘掉，不影响保存。
+        ...(quizData.model === 'axes' ? { scoring_mode: 'axes' } : {}),
+        raw_data: rawData
       };
       if (isLive) payload.published_at = new Date().toISOString();
 
@@ -249,6 +319,31 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     }
   };
 
+  // axes 卷的两个旧标签页换了语义：Content → 权重矩阵，Results → 原型文案。
+  // 位置仍是三个（而不是给 axes 另开一套导航）：「题目 / 结果 / 打分逻辑」
+  // 这件事三个模型都一样，只是画法不同。
+  const navTabs = quizData.model === 'axes'
+    ? [{ id: 'content', label: 'Matrix' }, { id: 'results', label: 'Archetypes' }, { id: 'logic', label: 'Logic' }]
+    : [{ id: 'content', label: 'Content' }, { id: 'results', label: 'Results' }, { id: 'logic', label: 'Logic' }];
+
+  const modelPicker = (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 animate-in fade-in">
+      {SCORING_MODELS.map(m => (
+        <button key={m.id} onClick={() => {
+          // 从 axes 切走 = 丢掉权重矩阵（archetypes + questions 不在旧载荷里）。
+          // 已上线的卷被手滑改回 score 就是一次静默的数据删除，所以问一次。
+          if (quizData.model === 'axes' && m.id !== 'axes' && axeQuiz.questions.length > 0) {
+            if (!window.confirm('切走会丢掉权重矩阵（archetypes + 题目 + 权重），确定要换打分模型？')) return;
+          }
+          setQuizData({ ...quizData, model: m.id });
+        }} className={`p-12 rounded-[48px] border-2 transition-all text-left space-y-6 ${quizData.model === m.id ? 'bg-white border-slate-900 shadow-2xl scale-105' : 'bg-white border-transparent opacity-50'}`}>
+          <div className={`p-5 rounded-2xl w-fit ${quizData.model === m.id ? 'bg-slate-900 text-white shadow-xl' : 'bg-slate-100 text-slate-400'}`}>{m.icon}</div>
+          <div><p className="text-xl font-black italic mb-2 text-slate-900">{m.name}</p><p className="text-[10px] text-slate-400 font-bold tracking-widest">{m.desc}</p></div>
+        </button>
+      ))}
+    </div>
+  );
+
   return (
     <div className="h-screen bg-[#F8F9FB] flex flex-col overflow-hidden text-left relative font-sans">
       {/* Toast通知 */}
@@ -271,7 +366,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
           </div>
         </div>
         <nav className="flex bg-slate-100 p-1 rounded-2xl">
-          {[{id:'content',label:'Content'},{id:'results',label:'Results'},{id:'logic',label:'Logic'}].map(t => (
+          {navTabs.map(t => (
             <button key={t.id} onClick={()=>setActiveTab(t.id)} className={`px-6 py-2 rounded-xl text-[10px] font-black tracking-widest transition-all ${activeTab === t.id ? 'bg-white shadow-sm text-slate-900' : 'text-slate-400'}`}>
               {t.label}
             </button>
@@ -289,7 +384,8 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       </header>
 
       <main className="flex-1 flex overflow-hidden">
-        {/* 左侧题目大纲 */}
+        {/* 左侧题目大纲（axes 卷不适用：题目直接在矩阵里编，不需要另开大纲） */}
+        {quizData.model !== 'axes' && (
         <aside className="w-72 bg-white border-r border-slate-200 flex flex-col shrink-0">
           <div className="p-6 border-b border-slate-50 text-[10px] font-black text-slate-400 tracking-widest">Outline</div>
           <div className="flex-1 overflow-y-auto p-4 space-y-2 no-scrollbar">
@@ -302,9 +398,22 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
             <button onClick={() => setQuizData({...quizData, questions: [...quizData.questions, { id: `q${Date.now()}`, title: "", weight: 1.0, options: [] }]})} className="w-full py-4 border-2 border-dashed border-slate-100 rounded-2xl text-[10px] font-black text-slate-300 hover:text-slate-900 transition-all">+ New Question</button>
           </div>
         </aside>
+        )}
 
         {/* 中间编辑主区 */}
-        <section className="flex-1 overflow-y-auto p-12 bg-[#FBFBFC]">
+        <section className={quizData.model === 'axes' ? "flex-1 overflow-hidden bg-[#FBFBFC]" : "flex-1 overflow-y-auto p-12 bg-[#FBFBFC]"}>
+          {quizData.model === 'axes' ? (
+            activeTab === 'logic' ? (
+              <div className="max-w-3xl mx-auto p-12">{modelPicker}</div>
+            ) : (
+              <QuizAxesEditor
+                quiz={axeQuiz}
+                onChange={setAxeQuiz}
+                view={activeTab === 'results' ? 'archetypes' : 'matrix'}
+                onViewChange={(next) => setActiveTab(next === 'archetypes' ? 'results' : 'content')}
+              />
+            )
+          ) : (
           <div className="max-w-3xl mx-auto">
             {activeTab === 'content' && (
               <div className="bg-white rounded-[40px] border border-slate-200 p-10 shadow-sm space-y-10 animate-in fade-in">
@@ -365,17 +474,9 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
               </div>
             )}
             
-            {activeTab === 'logic' && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 animate-in fade-in">
-                {SCORING_MODELS.map(m => (
-                  <button key={m.id} onClick={() => setQuizData({...quizData, model: m.id})} className={`p-12 rounded-[48px] border-2 transition-all text-left space-y-6 ${quizData.model === m.id ? 'bg-white border-slate-900 shadow-2xl scale-105' : 'bg-white border-transparent opacity-50'}`}>
-                    <div className={`p-5 rounded-2xl w-fit ${quizData.model === m.id ? 'bg-slate-900 text-white shadow-xl' : 'bg-slate-100 text-slate-400'}`}>{m.icon}</div>
-                    <div><p className="text-xl font-black italic mb-2 text-slate-900">{m.name}</p><p className="text-[10px] text-slate-400 font-bold tracking-widest">{m.desc}</p></div>
-                  </button>
-                ))}
-              </div>
-            )}
+            {activeTab === 'logic' && modelPicker}
           </div>
+          )}
         </section>
 
         {/* 右侧配置栏 (恢复分类管理) */}
@@ -449,7 +550,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
                   <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${quizData.is_limited ? 'left-6' : 'left-1'}`} />
                 </button>
              </div>
-             <p className="text-[9px] text-slate-400 font-bold leading-relaxed italic">Enable breathing "LIMITED" badge on cover.</p>
+             <p className="text-[9px] text-slate-400 font-bold leading-relaxed italic">Enable breathing &quot;LIMITED&quot; badge on cover.</p>
           </div>
 
           {/* 分类管理 (恢复) */}

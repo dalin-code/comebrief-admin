@@ -310,6 +310,9 @@ export default function QuizBatchImport({ open, onClose, onImported, onError }: 
       categories: entry.quiz.categories,
       tags: entry.quiz.tags,
       cover_url: entry.quiz.cover_url,
+      // axes 卷额外标一下 scoring_mode（列不存在时 insertDraftRows 会把它剔掉再试）。
+      // 前台读的是 raw_data.model，这一列只是给后台列表 / 查询用的。
+      ...(entry.quiz.model === 'axes' ? { scoring_mode: 'axes' } : {}),
     }))
 
     const titles = rows.map((row) => row.title)
