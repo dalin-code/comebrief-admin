@@ -8,6 +8,7 @@ import {
   Star, Clock
 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase"; // 🚀 关键：必须使用 import 进来的单例，不要在组件内 createClient
 import { effectiveStatus, markPublishedLocally, publishDueRows } from "@/lib/scheduled";
 import IndexNowButton from '@/app/admin/_components/IndexNowButton';
@@ -136,6 +137,21 @@ export default function QuizListPage() {
             <p className="text-[10px] font-black text-slate-400 tracking-[0.3em] mt-2">Manage your interactive matrix</p>
           </div>
           <div className="flex gap-4 flex-wrap justify-end">
+            {/*
+              设计稿入口：只在本地 / 预览环境出现。
+              生产后台不该出现一份「假数据静态稿」的入口，但评审时它确实
+              需要一个点得到的门 —— 不能只靠记 URL。
+            */}
+            {process.env.NODE_ENV !== 'production' && (
+              <Link
+                href="/mockup/quiz-studio"
+                target="_blank"
+                rel="noreferrer"
+                className="px-8 py-4 bg-white border border-slate-200 text-slate-500 rounded-2xl text-[10px] font-black tracking-widest hover:text-slate-900 hover:border-slate-300 transition-all flex items-center gap-2"
+              >
+                <Zap size={14}/> Quiz Studio 预览
+              </Link>
+            )}
             <IndexNowButton className="px-8 py-4 rounded-2xl text-[10px]" iconSize={16} />
             <button 
               onClick={() => { setIsRefreshing(true); fetchQuizzes(true); }}
