@@ -104,7 +104,7 @@
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `title` | ✅ | 列表页标题，不能为空/空白 |
-| `model` | ✅ | `score`（累加分，默认）或 `personality`（按 tag 计数） |
+| `model` | ✅ | `score`（累加分，默认）、`personality`（按 tag 计数）或 `axes`（原型矩阵，见 `docs/quiz-axes.md`） |
 | `categories` | 建议 | 数组。编辑器预置 `Persona` / `Subconscious` / `Social` / `Future`；不写按 `["Persona"]` 存 |
 | `tags` | 否 | `hot` / `featured` / `hardcore` 的子集；其它值能存，但后台没有对应按钮 |
 | `cover_url` | 否 | 封面 URL；留 `""`，导入后在编辑页上传 |
@@ -212,7 +212,7 @@
 **拦提交（红，必须修）**
 
 - 顶层不是对象 / `title` 空白
-- `model` 不是 `score` / `personality`
+- `model` 不是 `score` / `personality` / `axes`
 - `categories`、`tags` 不是数组
 - `cover_url` 不是字符串
 - `questions` 不是数组或为空、题目不是对象、题干为空
@@ -251,11 +251,12 @@
 ## 自检（改完 lib/quizPack.ts 或本文档的模板就跑一遍）
 
 ```bash
-node --import ./scripts/_ts-resolve.mts scripts/p13-quiz-pack-check.mts
+npm run check:pack
 ```
 
 覆盖：模板本身零 blocker 零 warning、围栏/中文引号/尾逗号/注释的容错、
-字符串里的 `//` 不被误删、缺 `questions`、区间有缝/重叠、归一化补默认值、数组多篇、格式化。
+字符串里的 `//` 不被误删、缺 `questions`、区间有缝/重叠、归一化补默认值、数组多篇、格式化，
+以及 axes 卷（不被当成未知模型、不要求 `results`、抽不到原型/重名是 blocker、归一化不塞 `score`）。
 
 ## 相关文件
 
@@ -266,6 +267,52 @@ node --import ./scripts/_ts-resolve.mts scripts/p13-quiz-pack-check.mts
 | `app/admin/(protected)/quizzes/create/page.tsx` | 编辑页，`BATCH IMPORT` 入口 + 导入成功后的 toast/跳转 |
 | `scripts/p13-quiz-pack-check.mts` | 上面那条自检命令 |
 | `docs/scheduled-publishing.md` | 导入后的草稿怎么排期、谁能翻成 published |
+
+## 第三种模型 `axes`：同一套导入，另一套判据
+
+`model: "axes"`（原型轴打分，权重矩阵 0–3，见 `docs/quiz-axes.md`）可以正常导入，
+但它的**形状不同**，所以校验也换了来源：
+
+```json
+{
+  "model": "axes",
+  "title": "What Kind of Online Persona Are You?",
+  "archetypes": [
+    { "id": "sarcastic", "name": "The Sarcastic Meme Curator", "short": "Sarc" },
+    { "id": "observer", "name": "The Calm Observer", "short": "Obsv" }
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "scene": "Monday, 9:03 AM",
+      "title": "Your group chat is on fire at 9 AM. You…",
+      "options": [
+        { "id": "a", "text": "Reply with a meme in 4 seconds", "weights": { "sarcastic": 3 } },
+        { "id": "b", "text": "Read everything, say nothing", "weights": { "observer": 3 } }
+      ]
+    }
+  ]
+}
+```
+
+- **没有 `results`**：结果是 `archetypes` 里胜出的那一个，不再用分数区间落点。
+  缺 `results` 不再是错误（这也是最容易误判的一条）。
+- **选项没有 `score` / `tag`**：只有 `weights`（`{ 原型 id: 0–3 }`），没写的格子按 0 算。
+- 校验不走 `validatePack` 的旧分支，而是 `axePackIssues()` → `lib/quizAxes` 的
+  `axeChecks()`：**导入框看到的 blocker 和 CI 的 `check:quiz` 是同一份规则**
+  （目前两个 blocker：有原型一种作答组合都抽不到、两个原型同名）。
+  其余（题量 6–10、命中率 < 12%、平局率 > 8%、废选项、文案缺项）只提醒。
+- 归一化 `normalizePack()` 原样保留 `archetypes` + `weights`，**不会**给选项补 `score` /
+  `tag` —— 否则 `raw_data` 里会出现两套互相矛盾的"分数"。
+
+真正画矩阵仍然建议用编辑页的 Matrix（`/admin/quizzes/create` → Logic → Archetype Matrix）：
+导入框能验，但画不出「每题 × 每个原型」的热力格子，让人以为自己配平了更危险。
+
+导入进来的一律是草稿（`status = draft`、`active = false`），且会顺手写
+`scoring_mode = 'axes'`（列不存在时自动剔除后重试）；去 `/admin/quizzes` 点编辑、
+在 Matrix 里复核一遍、再发布。
+
+
 
 
 
