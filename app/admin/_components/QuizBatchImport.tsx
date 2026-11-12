@@ -16,12 +16,13 @@
  * 校验逻辑全在 lib/quizPack.ts（纯函数，scripts/p13-quiz-pack-check.mts 里断言）。
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   X, Plus, Trash2, Loader2, AlertCircle, AlertTriangle, Wand2,
-  Eraser, FileJson, ClipboardPaste, ChevronDown, ChevronUp, BookOpen, Save, Undo2,
+  Eraser, FileJson, FileText, ClipboardPaste, ChevronDown, ChevronUp, BookOpen, Save, Undo2,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { getFreshAccessToken } from '@/lib/clientAuth'
 import {
   QUIZ_PACK_CHECKLIST,
   QUIZ_PACK_DOC_PATH,
@@ -30,10 +31,68 @@ import {
   inspectPackText,
   type QuizPackInspection,
 } from '@/lib/quizPack'
+import {
+  QUIZ_TEXT_CHECKLIST,
+  QUIZ_TEXT_DOC_PATH,
+  buildDraftRow,
+  inspectQuizText,
+  splitQuizText,
+  summarizeQuizText,
+  type QuizTextEntry,
+  type QuizTextStats,
+} from '@/lib/quizText'
+import QuizTextCard, { type QuizTidyResult } from './QuizTextCard'
 
 type Card = { key: string; text: string }
 
 const makeCard = (text = ''): Card => ({ key: Math.random().toString(36).slice(2, 9), text })
+
+/**
+ * 「AI 整理」要等十几秒，而这段时间里最贵的东西是**刚才粘进去的那段稿子**：
+ * 弹窗一关、标签页一刷，它就从世界上消失了（草稿箱里还是空的）。
+ * 所以每次改动都往 localStorage 压一份，重开弹窗时自己回来。
+ *
+ * 存的是**文本**，不是解析结果 —— 解析规则一改结果就过期，文本永不过期。
+ * 24 小时过期：隔天的残稿再弹出来只会变成噪音。
+ */
+const DRAFT_KEY = 'quiz-batch-import-draft:v1'
+const DRAFT_TTL_MS = 24 * 60 * 60 * 1000
+
+type SavedDraft = { mode: 'text' | 'json'; cards: string[]; splitText: string; savedAt: number }
+
+function readDraft(): SavedDraft | null {
+  try {
+    const raw = window.localStorage.getItem(DRAFT_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as SavedDraft
+    if (!parsed || !Array.isArray(parsed.cards)) return null
+    if (Date.now() - Number(parsed.savedAt || 0) > DRAFT_TTL_MS) {
+      window.localStorage.removeItem(DRAFT_KEY)
+      return null
+    }
+    // 全是空框就等于没有草稿：别为了一个空格弹一条「已恢复」横幅。
+    if (!parsed.cards.some((text) => String(text).trim())) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function writeDraft(draft: SavedDraft) {
+  try {
+    window.localStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
+  } catch {
+    /* 隐私模式下 localStorage 会抛：存不上就算了，不能因为存不了草稿让人导不进去 */
+  }
+}
+
+function clearDraft() {
+  try {
+    window.localStorage.removeItem(DRAFT_KEY)
+  } catch {
+    /* 同上 */
+  }
+}
 
 /**
  * 缺列就剔掉该列重试 —— 和编辑页 handlePublish 同一套策略，
@@ -257,24 +316,89 @@ type Props = {
 }
 
 export default function QuizBatchImport({ open, onClose, onImported, onError }: Props) {
+  /**
+   * 两种输入方式，产出完全同一种行（`quizzes` 的 draft）。
+   * 默认文本：这是给「写稿的人」用的入口；JSON 留给「要精确控制每个字段」的人。
+   */
+  const [mode, setMode] = useState<'text' | 'json'>('text')
   const [cards, setCards] = useState<Card[]>([makeCard()])
   const [helpOpen, setHelpOpen] = useState(false)
   const [splitOpen, setSplitOpen] = useState(false)
   const [splitText, setSplitText] = useState('')
   const [splitError, setSplitError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  /** 恢复过草稿的时间戳；非 null 就在顶部挂一条「上次的还在」横幅 */
+  const [restoredAt, setRestoredAt] = useState<number | null>(null)
 
-  const inspections = useMemo(() => cards.map((card) => inspectPackText(card.text)), [cards])
+  /**
+   * 打开弹窗时把上次没导入的稿子接回来。
+   *
+   * 只接**空**的弹窗：如果这一秒正在写（父级没卸载、只是又点开了），
+   * 就不能拿旧草稿盖掉手上的字。恢复之后不清 key —— 横幅上给「清空重来」，
+   * 让人自己决定，而不是替他扔掉。
+   */
+  useEffect(() => {
+    if (!open) return
+    const saved = readDraft()
+    if (!saved) return
+    /**
+     * `react-hooks/set-state-in-effect` 在这里是**故意关掉的**：这个 effect 的全部
+     * 工作就是「从 localStorage 这个外部系统同步一次初始表单」，正属于规则自己
+     * 列举的合法用途。改成 render 期间 setState 反而更糟：`open` 是 props，
+     * 首帧在服务端渲染时还没有 localStorage。
+     */
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setCards((prev) => (prev.some((card) => card.text.trim()) ? prev : saved.cards.map((text) => makeCard(String(text)))))
+    if (saved.mode === 'text' || saved.mode === 'json') setMode(saved.mode)
+    if (saved.splitText) setSplitText(saved.splitText)
+    setRestoredAt(saved.savedAt)
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [open])
 
-  const readyEntries = inspections.flatMap((inspection) =>
-    inspection.ok ? inspection.entries.filter((entry) => entry.ok) : []
+  /** 改动 600ms 后落盘：连打不会每次都写 localStorage。全空就删掉 key。 */
+  useEffect(() => {
+    if (!open) return
+    if (!cards.some((card) => card.text.trim()) && !splitText.trim()) {
+      clearDraft()
+      return
+    }
+    const timer = setTimeout(() => {
+      writeDraft({ mode, cards: cards.map((card) => card.text), splitText, savedAt: Date.now() })
+    }, 600)
+    return () => clearTimeout(timer)
+  }, [open, mode, cards, splitText])
+
+  // 只算当前模式那一套：文本模式每次按键要跑 65,536 次全枚举（~9ms/篇），
+  // 两套都算就是白烧一倍。（JSON 那条走 lib/quizPack，不做枚举。）
+  const inspections = useMemo(
+    () => (mode === 'json' ? cards.map((card) => inspectPackText(card.text)) : []),
+    [cards, mode]
   )
-  const totalEntries = inspections.reduce((sum, inspection) => sum + inspection.entries.length, 0)
+  const textInspections = useMemo(
+    () => (mode === 'text' ? cards.map((card) => inspectQuizText(card.text)) : []),
+    [cards, mode]
+  )
+
+  const packReady = inspections.flatMap((inspection) => (inspection.ok ? inspection.entries.filter((entry) => entry.ok) : []))
+  const textReady = textInspections.flatMap((inspection) => inspection.entries.filter((entry) => entry.ok))
+  const readyEntries = mode === 'json' ? packReady : textReady
+  const totalEntries =
+    mode === 'json'
+      ? inspections.reduce((sum, inspection) => sum + inspection.entries.length, 0)
+      : textInspections.reduce((sum, inspection) => sum + inspection.entries.length, 0)
+
   const brokenCards = cards.filter((card, i) => {
     if (!card.text.trim()) return false
-    const inspection = inspections[i]
-    return !(inspection.ok && inspection.entries.length > 0 && inspection.entries.every((entry) => entry.ok))
+    if (mode === 'json') {
+      const inspection = inspections[i]
+      return !(inspection.ok && inspection.entries.length > 0 && inspection.entries.every((entry) => entry.ok))
+    }
+    const inspection = textInspections[i]
+    return !(inspection.entries.length > 0 && inspection.entries.every((entry) => entry.ok))
   }).length
+
+  /** 文本模式里贴了 JSON：不猜、不自动切，指一下路就行。 */
+  const looksLikeJson = mode === 'text' && cards.some((card) => /^\s*[[{]/.test(card.text))
 
   const updateCard = (key: string, text: string) =>
     setCards((prev) => prev.map((card) => (card.key === key ? { ...card, text } : card)))
@@ -282,7 +406,30 @@ export default function QuizBatchImport({ open, onClose, onImported, onError }: 
   const removeCard = (key: string) =>
     setCards((prev) => (prev.length <= 1 ? prev : prev.filter((card) => card.key !== key)))
 
+  const switchMode = (next: 'text' | 'json') => {
+    if (next === mode) return
+    if (cards.some((card) => card.text.trim()) && !window.confirm('切换输入方式会清空现在的所有输入框，继续？')) return
+    setMode(next)
+    setCards([makeCard()])
+    setSplitText('')
+    setSplitError(null)
+    setSplitOpen(false)
+  }
+
   const handleSplit = () => {
+    if (mode === 'text') {
+      const blocks = splitQuizText(splitText)
+      if (!blocks.length) {
+        setSplitError('这段里没找到 TITLE: —— 每篇的第一行必须是 TITLE:')
+        return
+      }
+      setSplitError(null)
+      setCards((prev) => [...prev.filter((card) => card.text.trim()), ...blocks.map((block) => makeCard(block))])
+      setSplitText('')
+      setSplitOpen(false)
+      return
+    }
+
     const inspection = inspectPackText(splitText)
     if (!inspection.ok) {
       setSplitError(inspection.error?.message ?? '解析失败')
@@ -302,20 +449,25 @@ export default function QuizBatchImport({ open, onClose, onImported, onError }: 
   const handleSubmit = async () => {
     if (!readyEntries.length || brokenCards > 0 || saving) return
 
-    const rows = readyEntries.map((entry) => ({
-      title: entry.quiz.title,
-      raw_data: entry.quiz,
-      active: false,
-      status: 'draft',
-      categories: entry.quiz.categories,
-      tags: entry.quiz.tags,
-      cover_url: entry.quiz.cover_url,
-      // axes 卷额外标一下 scoring_mode（列不存在时 insertDraftRows 会把它剔掉再试）。
-      // 前台读的是 raw_data.model，这一列只是给后台列表 / 查询用的。
-      ...(entry.quiz.model === 'axes' ? { scoring_mode: 'axes' } : {}),
-    }))
+    const rows =
+      mode === 'json'
+        ? (readyEntries as any[]).map((entry) => ({
+            title: entry.quiz.title,
+            raw_data: entry.quiz,
+            active: false,
+            status: 'draft',
+            categories: entry.quiz.categories,
+            tags: entry.quiz.tags,
+            cover_url: entry.quiz.cover_url,
+            // axes 卷额外标一下 scoring_mode（列不存在时 insertDraftRows 会把它剔掉再试）。
+            // 前台读的是 raw_data.model，这一列只是给后台列表 / 查询用的。
+            ...(entry.quiz.model === 'axes' ? { scoring_mode: 'axes' } : {}),
+          }))
+        : (readyEntries as QuizTextEntry[])
+            .map((entry) => buildDraftRow(entry))
+            .filter((row): row is Record<string, unknown> => Boolean(row))
 
-    const titles = rows.map((row) => row.title)
+    const titles = rows.map((row) => String(row.title ?? ''))
     const duplicates = [...new Set(titles.filter((title, i) => titles.indexOf(title) !== i))]
     if (duplicates.length && !window.confirm(`有 ${duplicates.length} 个重复标题：${duplicates.join('、')}。仍然导入？`)) return
 
@@ -328,9 +480,68 @@ export default function QuizBatchImport({ open, onClose, onImported, onError }: 
       return
     }
     onImported(rows.length)
+    clearDraft()
+    setRestoredAt(null)
     setCards([makeCard()])
     setSplitText('')
     setSplitOpen(false)
+  }
+
+  /**
+   * AI 整理（文本模式）：整段丢给 `/api/admin/quiz/text`，拿回**同一套模板**的文本
+   * 和「整理前 / 整理后」的数字。
+   *
+   * 三件事在这一层做掉，卡片只管显示：
+   *   · **不写回**：返回值是「待采用」，卡片摆出 `结果 2 → 4` 让作者点头；
+   *   · **不弹 toast**：失败的那句话回到卡片里、贴着原文显示 —— 作者正盯着那个框，
+   *     而 toast 在屏幕另一角一闪就没了；
+   *   · **按 code 说话**：TRUNCATED（模型没写完）/ PARSE_FAILED（回来的不认模板）/
+   *     PROVIDER（供应商报错）是三种不同的病。以前一律取 `payload.error`，
+   *     于是「写了一半」和「没按模板写」听起来一模一样，只能靠猜。
+   */
+  const handleTidy = async (text: string): Promise<QuizTidyResult> => {
+    try {
+      const call = async (token: string) =>
+        fetch('/api/admin/quiz/text', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ text }),
+        })
+
+      let token = await getFreshAccessToken()
+      let response = await call(token)
+      if (response.status === 401) {
+        const fresh = await getFreshAccessToken(true)
+        if (fresh && fresh !== token) {
+          token = fresh
+          response = await call(token)
+        }
+      }
+
+      const payload = (await response.json().catch(() => ({}))) as any
+      if (!response.ok || !payload?.ok) {
+        const code = String(payload?.code || '')
+        const message =
+          code === 'TRUNCATED'
+            ? '模型这次没写完就断了（撞上输出上限）。再点一次；连续两次都这样，就把这一段拆成两篇分别整理。'
+            : code === 'PARSE_FAILED'
+              ? '模型回来了，但没按模板写，一段都认不出来。再点一次；还是不行就先点「规范化」再试。'
+              : String(payload?.error || `AI 整理失败（HTTP ${response.status}）`)
+        return { ok: false, message, retryable: payload?.retryable !== false }
+      }
+
+      // 服务端已经算好了 summary；这里只是兜底（比如以后老版本接口还在跑）
+      const after: QuizTextStats =
+        payload?.summary?.after ?? summarizeQuizText(inspectQuizText(String(payload.text || '')))
+      return {
+        ok: true,
+        text: String(payload.text || ''),
+        after,
+        partial: payload?.partial === true,
+      }
+    } catch (error: any) {
+      return { ok: false, message: error?.message || 'AI 整理失败（网络断了？）', retryable: true }
+    }
   }
 
   if (!open) return null
@@ -342,26 +553,95 @@ export default function QuizBatchImport({ open, onClose, onImported, onError }: 
   return (
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
       <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
-        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
-          <div className="flex items-center gap-3">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between gap-3 bg-slate-50 shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
             <div className="bg-slate-900 text-white p-2 rounded-xl">
               <ClipboardPaste size={16} />
             </div>
-            <div>
+            <div className="min-w-0">
               <h3 className="text-sm font-black tracking-widest text-slate-900">批量草稿导入</h3>
-              <p className="text-[10px] font-bold text-slate-400 mt-0.5">一个框一篇 · 导入后一律是草稿，排期 / 发布仍在编辑页</p>
+              <p className="text-[10px] font-bold text-slate-400 mt-0.5">
+                {mode === 'text'
+                  ? '一个框一篇 · 粘「TITLE: …」格式的稿子 · 导入后一律是草稿，排期 / 发布仍在编辑页'
+                  : '一个框一篇 · 粘 JSON · 导入后一律是草稿，排期 / 发布仍在编辑页'}
+              </p>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-900 bg-white p-2 rounded-xl">
-            <X size={20} />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center bg-slate-200/70 rounded-xl p-0.5">
+              <button
+                type="button"
+                onClick={() => switchMode('text')}
+                className={`text-[9px] font-black tracking-widest px-3 py-1.5 rounded-lg flex items-center gap-1 transition-all ${
+                  mode === 'text' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <FileText size={12} /> 文本
+              </button>
+              <button
+                type="button"
+                onClick={() => switchMode('json')}
+                className={`text-[9px] font-black tracking-widest px-3 py-1.5 rounded-lg flex items-center gap-1 transition-all ${
+                  mode === 'json' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <FileJson size={12} /> JSON
+              </button>
+            </div>
+            <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-900 bg-white p-2 rounded-xl">
+              <X size={20} />
+            </button>
+          </div>
         </div>
+
+        {restoredAt !== null && (
+          <div className="px-6 py-2 bg-emerald-50 border-b border-emerald-100 flex items-center justify-between gap-3 shrink-0">
+            <p className="text-[10px] font-bold text-emerald-700">
+              已恢复上次没导入的稿子（{new Date(restoredAt).toLocaleString('zh-CN', { hour12: false })}）——
+              AI 整理要等十几秒，别再让它白写一次。
+            </p>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  clearDraft()
+                  setCards([makeCard()])
+                  setSplitText('')
+                  setSplitError(null)
+                  setSplitOpen(false)
+                  setRestoredAt(null)
+                }}
+                className={ghostButton}
+              >
+                <Eraser size={12} /> 清空重来
+              </button>
+              <button type="button" onClick={() => setRestoredAt(null)} className={ghostButton}>
+                知道了
+              </button>
+            </div>
+          </div>
+        )}
+
+        {looksLikeJson && (
+          <div className="px-6 py-2.5 bg-amber-50 border-b border-amber-100 flex items-center justify-between gap-3 shrink-0">
+            <p className="text-[10px] font-bold text-amber-700">
+              这个框里像是 JSON —— 文本模式只认「TITLE: … / == RESULT ==」那一套。
+            </p>
+            <button
+              type="button"
+              onClick={() => switchMode('json')}
+              className="text-[9px] font-black tracking-widest px-3 py-1.5 rounded-lg bg-amber-600 text-white shrink-0"
+            >
+              切到 JSON 模式
+            </button>
+          </div>
+        )}
 
         {helpOpen && (
           <div className="px-6 py-4 bg-blue-50/60 border-b border-blue-100 space-y-2 shrink-0 max-h-60 overflow-y-auto">
             <p className="text-[10px] font-black tracking-widest text-blue-600">格式要求</p>
             <ul className="space-y-1">
-              {QUIZ_PACK_CHECKLIST.map((item) => (
+              {(mode === 'text' ? QUIZ_TEXT_CHECKLIST : QUIZ_PACK_CHECKLIST).map((item) => (
                 <li key={item} className="text-[11px] font-bold text-slate-600 leading-relaxed flex gap-2">
                   <span className="text-blue-400">·</span>
                   {item}
@@ -369,7 +649,9 @@ export default function QuizBatchImport({ open, onClose, onImported, onError }: 
               ))}
             </ul>
             <p className="text-[10px] font-bold text-slate-400 leading-relaxed">
-              完整字段说明在仓库里：<span className="font-mono">{QUIZ_PACK_DOC_PATH}</span> · 想要现成骨架就点框右上角「模板」
+              完整字段说明在仓库里：
+              <span className="font-mono">{mode === 'text' ? QUIZ_TEXT_DOC_PATH : QUIZ_PACK_DOC_PATH}</span> ·
+              想要现成骨架就点框右上角「模板」
             </p>
           </div>
         )}
@@ -377,7 +659,9 @@ export default function QuizBatchImport({ open, onClose, onImported, onError }: 
         {splitOpen && (
           <div className="px-6 py-4 bg-indigo-50/60 border-b border-indigo-100 space-y-2 shrink-0">
             <p className="text-[10px] font-black tracking-widest text-indigo-500">
-              整段粘贴：把一整个 [ ... ] 数组拆成多个框
+              {mode === 'text'
+                ? '整段粘贴：把多篇「TITLE: …」拆成多个框（用 --- 或重复的 TITLE: 分隔都行）'
+                : '整段粘贴：把一整个 [ ... ] 数组拆成多个框'}
             </p>
             <textarea
               value={splitText}
@@ -386,7 +670,11 @@ export default function QuizBatchImport({ open, onClose, onImported, onError }: 
                 setSplitError(null)
               }}
               spellCheck={false}
-              placeholder="把包含多篇的数组粘到这里，会按篇拆成多个框"
+              placeholder={
+                mode === 'text'
+                  ? '把包含多篇的文本粘到这里，会在每个 TITLE: 处拆开'
+                  : '把包含多篇的数组粘到这里，会按篇拆成多个框'
+              }
               className="w-full h-32 bg-white border border-indigo-100 rounded-2xl p-4 font-mono text-[11px] outline-none resize-y leading-relaxed"
             />
             {splitError && <p className="text-[10px] font-bold text-rose-500">{splitError}</p>}
@@ -414,18 +702,31 @@ export default function QuizBatchImport({ open, onClose, onImported, onError }: 
         )}
 
         <div className="p-6 bg-slate-100 space-y-4 overflow-y-auto flex-1">
-          {cards.map((card, i) => (
-            <PackCard
-              key={card.key}
-              index={i}
-              card={card}
-              inspection={inspections[i]}
-              canRemove={cards.length > 1}
-              onChange={(text) => updateCard(card.key, text)}
-              onRemove={() => removeCard(card.key)}
-              onError={onError}
-            />
-          ))}
+          {mode === 'text'
+            ? cards.map((card, i) => (
+                <QuizTextCard
+                  key={card.key}
+                  index={i}
+                  text={card.text}
+                  inspection={textInspections[i]}
+                  canRemove={cards.length > 1}
+                  onChange={(text) => updateCard(card.key, text)}
+                  onRemove={() => removeCard(card.key)}
+                  onTidy={handleTidy}
+                />
+              ))
+            : cards.map((card, i) => (
+                <PackCard
+                  key={card.key}
+                  index={i}
+                  card={card}
+                  inspection={inspections[i]}
+                  canRemove={cards.length > 1}
+                  onChange={(text) => updateCard(card.key, text)}
+                  onRemove={() => removeCard(card.key)}
+                  onError={onError}
+                />
+              ))}
         </div>
 
         <div className="px-6 py-4 border-t border-slate-100 bg-white flex items-center justify-between gap-4 shrink-0 flex-wrap">

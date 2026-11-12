@@ -65,3 +65,20 @@ jobs:
       # 与后台 /admin/quiz-studio 共用 lib/quizStudio.ts，改坏会在这里先红。
       - name: Quiz studio checks
         run: npm run check:studio
+
+      # AI 起草的契约层：kit 归一化 / 五条硬规则 / 3-1 权重编译 / 全枚举分布。
+      # 与 /admin/quizzes/create 的「AI 起草」向导共用 lib/quizKit + lib/quizCompile。
+      - name: Quiz kit checks
+        run: npm run check:kit
+
+      # 文本粘贴路径：模板必须自己过四层闸 / 行号 / 往返 / 6–10 题区间 / 四类负样本。
+      # 与批量导入弹窗的「文本」模式共用 lib/quizText。
+      # 这条**必须**在 CI 里：模板过不了闸时，弹窗里的「模板」按钮就是在教人写错的东西，
+      # 而模板坏了没人会自己发现（它是被「插入」的，不是被「改」的）。
+      - name: Quiz text checks
+        run: npm run check:text
+
+      # 趋势采集的纯逻辑：RSS/Atom 解析（含 ht: 命名空间与 CDATA）/ 去重 / 轮转合并 /
+      # 敏感词过滤 / 热词抽取。**不联网**，夹具是三个源的真实响应切片。
+      - name: Trend collection checks
+        run: npm run check:trends

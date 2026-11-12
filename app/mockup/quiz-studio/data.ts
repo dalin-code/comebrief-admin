@@ -384,9 +384,9 @@ export function healthChecks(
 
   checks.push({
     id: "tie",
-    state: result.tiePct <= 8 ? "ok" : "warn",
-    label: `平局率 ${result.tiePct.toFixed(1)}%（上限 8%）`,
-    detail: result.tiePct <= 8 ? undefined : "题目区分度不够，相邻两档会互相稀释",
+    state: result.tiePct <= 12 ? "ok" : "warn",
+    label: `平局率 ${result.tiePct.toFixed(1)}%（上限 12%）`,
+    detail: result.tiePct <= 12 ? undefined : "题目区分度不够，相邻两档会互相稀释",
     penalty: 10,
   });
 
@@ -585,7 +585,7 @@ export const QUIZ_ROWS: QuizRow[] = [
     views: "6.6k",
     share: "17%",
     status: "published",
-    note: "平局率 11%，超过 8% 上限",
+    note: "平局率 14%，超过 12% 上限",
     cover: "from-[#F5C84C] to-[#f7dc8f]",
   },
   {

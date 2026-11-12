@@ -70,8 +70,8 @@ export function blankAxeQuiz(): AxeQuiz {
   return {
     model: "axes",
     archetypes: [
-      { id: "arch1", name: "Archetype One", short: "A1", headline: "", quote: "", stats: [], pills: [] },
-      { id: "arch2", name: "Archetype Two", short: "A2", headline: "", quote: "", stats: [], pills: [] },
+      { id: "arch1", name: "Archetype One", short: "A1", headline: "", quote: "", summary: "", stats: [], pills: [] },
+      { id: "arch2", name: "Archetype Two", short: "A2", headline: "", quote: "", summary: "", stats: [], pills: [] },
     ],
     questions: [
       {
@@ -232,7 +232,7 @@ export default function QuizAxesEditor({ quiz, onChange, view, onViewChange }: P
     patch((draft) => {
       const used = new Set(draft.archetypes.map((a) => a.id));
       const id = uniqueId(`arch${draft.archetypes.length + 1}`, used);
-      draft.archetypes.push({ id, name: "", short: "", headline: "", quote: "", stats: [], pills: [] });
+      draft.archetypes.push({ id, name: "", short: "", headline: "", quote: "", summary: "", stats: [], pills: [] });
     });
   };
 
@@ -251,7 +251,7 @@ export default function QuizAxesEditor({ quiz, onChange, view, onViewChange }: P
 
   const setArchetypeText = (
     ai: number,
-    field: "name" | "short" | "headline" | "quote",
+    field: "name" | "short" | "headline" | "quote" | "summary",
     value: string
   ) => {
     patch((draft) => {
@@ -671,6 +671,13 @@ export default function QuizAxesEditor({ quiz, onChange, view, onViewChange }: P
                     onChange={(e) => setArchetypeText(ai, "quote", e.target.value)}
                     placeholder="Quote · 印在结果页引语块里的一句话"
                     rows={2}
+                    className="w-full resize-none rounded-xl bg-slate-50 px-4 py-2.5 text-[12px] font-medium leading-relaxed text-slate-600 outline-none transition-all focus:bg-white"
+                  />
+                  <textarea
+                    value={a.summary ?? ""}
+                    onChange={(e) => setArchetypeText(ai, "summary", e.target.value)}
+                    placeholder="The Read · 结果页正文那一段（AI 起草会填，2–3 句）"
+                    rows={3}
                     className="w-full resize-none rounded-xl bg-slate-50 px-4 py-2.5 text-[12px] font-medium leading-relaxed text-slate-600 outline-none transition-all focus:bg-white"
                   />
 

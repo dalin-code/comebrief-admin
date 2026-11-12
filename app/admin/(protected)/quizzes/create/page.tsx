@@ -11,6 +11,7 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import QuizBatchImport from "@/app/admin/_components/QuizBatchImport";
+import QuizAiWizard, { type QuizAiApplyPayload } from "@/app/admin/_components/QuizAiWizard";
 import QuizAxesEditor, { blankAxeQuiz } from "@/app/admin/_components/QuizAxesEditor";
 import { auditAxeQuiz, normalizeAxeQuiz, type AxeQuiz } from "@/lib/quizAxes";
 // --- 🚀 AURA 核心：WebP 转码转码引擎 ---
@@ -57,7 +58,12 @@ function QuizEditorContent() {
   const [scheduledAt, setScheduledAt] = useState("");
   const [isFeatured, setIsFeatured] = useState(false);
   const [featuredOrder, setFeaturedOrder] = useState(0);
-  const [showImportModal, setShowImportModal] = useState(false); 
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [showAiWizard, setShowAiWizard] = useState(false);
+  // AI 起草带过来的溯源信息（趋势 id / 热词 / 地区 / 模型），保存时写进 raw_data.meta。
+  // 单独放一份状态而不是塞进 quizData：旧卷没有这个字段，混进去会让旧路径的载荷变形。
+  const [aiMeta, setAiMeta] = useState<Record<string, any> | null>(null);
+  const [aiHook, setAiHook] = useState(""); 
   const [toast, setToast] = useState<{ msg: string, type: 'success' | 'error' } | null>(null);
 
   // 分类管理状态 (之前丢失的部分)
@@ -214,6 +220,28 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
   }
 };
 
+  /**
+   * AI 起草 → 编辑器。
+   *
+   * 只**填**，不保存：标题 / 分类 / 标签 / 四个原型 / 8 题 × 4 选项全部进状态，
+   * 打分模型切到 axes（否则矩阵编辑器整块不渲染，用户会以为“点了没反应”）。
+   * meta 存起来，保存时写进 raw_data.meta —— 三个月后还能回答“这卷依据什么”。
+   */
+  const handleAiApply = (payload: QuizAiApplyPayload) => {
+    setQuizData((prev) => ({
+      ...prev,
+      title: payload.title || prev.title,
+      model: 'axes',
+      categories: payload.categories.length ? payload.categories : prev.categories,
+      tags: payload.tags,
+    }));
+    setAxeQuiz(payload.quiz);
+    setAiMeta(payload.meta ?? null);
+    setAiHook(payload.hook ?? '');
+    setActiveTab('content');
+    showToast(`AI 起草已填入：${payload.quiz.questions.length} 题 / ${payload.quiz.archetypes.length} 个结果`, 'success');
+  };
+
   const handlePublish = async () => {
     if (!quizData.title.trim()) return showToast("Title required", "error");
 
@@ -258,8 +286,15 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
             tags: quizData.tags,
             cover_url: quizData.cover_url,
             is_limited: quizData.is_limited,
+            // AI 起草带过来的两样：列表卡片副标题 + 溯源信息（趋势 id / 热词 / 地区 / 模型）。
+            // 都只在新卷上出现，旧卷保存时这两个键根本不存在，raw_data 形状不变。
+            ...(aiHook ? { hook: aiHook } : {}),
+            ...(aiMeta ? { meta: aiMeta } : {}),
             archetypes: axeQuiz.archetypes,
             questions: axeQuiz.questions,
+            // 结果页地图的两条轴。新卷从 AI 起草 / 手写里带过来；没有就不写这个键，
+            // 前台会退回雷达图 —— 但**不能**在这里凭空造一对轴名，那是编内容。
+            ...(axeQuiz.axes ? { axes: axeQuiz.axes } : {}),
           }
         : quizData;
 
@@ -373,6 +408,9 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
           ))}
         </nav>
         <div className="flex items-center gap-3">
+           <button onClick={() => setShowAiWizard(true)} className="bg-white border border-slate-200 text-slate-600 px-6 py-3 rounded-2xl text-[10px] font-black flex items-center gap-2 shadow-sm hover:bg-slate-50 transition-all">
+             <Sparkles size={14} /> AI 起草
+           </button>
            <button onClick={() => setShowImportModal(true)} className="bg-white border border-slate-200 text-slate-600 px-6 py-3 rounded-2xl text-[10px] font-black flex items-center gap-2 shadow-sm hover:bg-slate-50 transition-all">
              <UploadCloud size={14} /> Batch Import
            </button>
@@ -612,6 +650,13 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
           </div>
         </aside>
       </main>
+
+      {/* AI 起草：趋势 → 选题 → 生成 → 应用（逻辑在 lib/quizKit + lib/quizCompile + 三个 API 路由） */}
+      <QuizAiWizard
+        open={showAiWizard}
+        onClose={() => setShowAiWizard(false)}
+        onApply={handleAiApply}
+      />
 
       {/* 批量草稿导入：多框 + 提交前校验（逻辑在 lib/quizPack.ts） */}
       <QuizBatchImport

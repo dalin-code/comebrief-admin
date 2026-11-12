@@ -55,6 +55,7 @@ import {
   safeParseModelJson,
   type ProviderErrorKind,
 } from './aiGemini'
+import { closeTruncatedJson } from './jsonSalvage'
 
 export type AiProviderName = 'gemini' | 'openrouter' | 'anthropic' | 'openai' | 'deepseek' | 'zhipu' | 'moonshot' | 'groq' | 'siliconflow'
 
@@ -989,15 +990,47 @@ export async function callText(o: CallTextOptions): Promise<CallTextResult> {
   }
 }
 
+/** 截断的 JSON 兜底：实现在 `lib/jsonSalvage`（零依赖，脚本里也能直接 import） */
+export { closeTruncatedJson } from './jsonSalvage'
+
 /** 要求模型返回 JSON 的调用（P3 的「AI 审稿」用这个） */
 export async function callTextJson<T = any>(
   o: CallTextOptions
-): Promise<{ ok: true; value: T; model: string } | { ok: false; status: number; error: string }> {
+): Promise<
+  { ok: true; value: T; model: string; truncated: boolean } | { ok: false; status: number; error: string }
+> {
   const r = await callText({ ...o, jsonMode: true })
   if (r.ok === false) return { ok: false, status: r.status, error: r.error }
+
   const parsed = safeParseModelJson(r.text)
-  if (parsed.ok === false) return { ok: false, status: 502, error: `模型返回的不是合法 JSON：${r.text.slice(0, 120)}` }
-  return { ok: true, value: parsed.value as T, model: r.model }
+  if (parsed.ok === true) {
+    return { ok: true, value: parsed.value as T, model: r.model, truncated: r.truncated === true }
+  }
+
+  // 截断兜底：丢掉最后一个没写完的条目，前面的还能用。
+  // 不看 `truncated` 标志也试一次 —— OpenAI 兼容层有时 finish_reason=stop，
+  // 但内容明显断在半句（用户的实测就是这种：`{"ideas":[{"title":"…","angle":"How do you han`）。
+  // `closeTruncatedJson` 只在括号没配平时才返回内容，所以对正常输出没有副作用。
+  const repaired = closeTruncatedJson(r.text)
+  const second = repaired ? safeParseModelJson(repaired) : null
+  if (second?.ok === true) {
+    console.log('[ai-provider] JSON 不完整：已丢弃最后一个未闭合条目后解析成功')
+    return { ok: true, value: second.value as T, model: r.model, truncated: true }
+  }
+
+  if (r.truncated) {
+    return {
+      ok: false,
+      status: 502,
+      error: '模型输出被截断（maxOutputTokens 用尽）：把条数调小一点再试，或稍后重试',
+    }
+  }
+
+  return {
+    ok: false,
+    status: 502,
+    error: `模型返回的不是合法 JSON：${r.text.slice(0, 120)}`,
+  }
 }
 
 /**

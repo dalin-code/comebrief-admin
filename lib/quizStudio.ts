@@ -372,6 +372,11 @@ export function buildAxesRawData(row: QuizRow, quiz: AxeQuiz): Record<string, an
     is_limited: Boolean(row.is_limited ?? base.is_limited),
     archetypes: quiz.archetypes,
     questions: quiz.questions,
+    // `...base` 已经把库里的 axes 带过来了，但编辑器里的那份才是**这次**编辑的结果
+    // （作者可能刚改完轴名）。显式覆盖：少这一行，保存一次就会把新写的轴名回滚成
+    // 库里那份旧值 —— 而且因为 `...base` 在前后顺序上「看起来是对的」，这种回滚
+    // 只在「改了轴名又保存」时出现，很难复现。
+    axes: quiz.axes ?? base.axes,
   }
 }
 

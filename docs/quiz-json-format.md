@@ -1,5 +1,9 @@
 # 测验 JSON 格式（批量草稿导入）
 
+> 先看这里：如果手上是「标题 / 结果 / 题目」这种**段落**，别硬塞进 JSON ——
+> 弹窗顶部切到 **文本** 模式，用 [文本格式](quiz-text-format.md)（带行号校验 + ✨ AI 整理）。
+> 下面这份是「要精确控制每个字段」时用的。
+
 ## 问题
 
 `/admin/quizzes/create` 的 **BATCH IMPORT** 以前是「一个 textarea + `JSON.parse` + `insert`」，
@@ -301,9 +305,41 @@ npm run check:pack
 - 校验不走 `validatePack` 的旧分支，而是 `axePackIssues()` → `lib/quizAxes` 的
   `axeChecks()`：**导入框看到的 blocker 和 CI 的 `check:quiz` 是同一份规则**
   （目前两个 blocker：有原型一种作答组合都抽不到、两个原型同名）。
-  其余（题量 6–10、命中率 < 12%、平局率 > 8%、废选项、文案缺项）只提醒。
+  其余（题量 6–10、命中率 < 12%、平局率 > 12%、废选项、文案缺项）只提醒。
 - 归一化 `normalizePack()` 原样保留 `archetypes` + `weights`，**不会**给选项补 `score` /
   `tag` —— 否则 `raw_data` 里会出现两套互相矛盾的"分数"。
+
+### 结果页 v3 的可选字段（写了才有，缺了降级）
+
+结果页 02 那一块（Answer map / Your mix / 三块仪表）由下面这些**可选**字段驱动。
+全部可缺，缺了只影响那一块的丰满度，不影响胜负判定：
+
+```json
+{
+  "axes": { "x": { "neg": "Solo", "pos": "Social" }, "y": { "neg": "Low-key", "pos": "Loud" } },
+  "archetypes": [
+    { "id": "sarcastic", "name": "The Sarcastic Meme Curator", "quadrant": "TL", "color": "#FFE45E", "pose": "worry" }
+  ],
+  "questions": [
+    { "options": [{ "id": "a", "text": "…", "weights": { "sarcastic": 3 }, "intensity": 3, "bold": true }] }
+  ]
+}
+```
+
+| 字段 | 取值 | 缺了会怎样 |
+| --- | --- | --- |
+| `axes.x` / `axes.y` | 各含 `neg` + `pos` 两个非空标签 | 地图不渲染（退回雷达图） |
+| `archetypes[].quadrant` | `TL` / `TR` / `BL` / `BR`，四个原型**各占一个** | 缺一个或重复 → 地图与配比列表都退回雷达 |
+| `archetypes[].color` | `#RRGGBB` | 按象限用兜底色（不影响降级） |
+| `archetypes[].pose` | `shades` / `wave` / `love` / `worry` | 按 id 哈希派生（v2 起 pose 只决定**表情**，角色由象限决定，所以撞了也不撞脸） |
+| `options[].intensity` | 1–3，越界夹住 | `Intensity` 仪表算不出来 → 三块仪表整块不渲染 |
+| `options[].bold` | 布尔（`0/1` 也读） | `Bold picks` 算不出来 → 同上 |
+
+三块仪表的算法是**算出来的、不是编的**：`Intensity` = 已选选项 intensity 的均值，
+`Bold picks` = 选中 `bold` 的比例，`Range` = 四个原型配比的归一化熵。
+保存路径（`buildAxesRawData()`）原样带上这些字段；`scripts/check-quiz-studio.mts`
+的 5d–5h 就是防止某次改动把它们洗掉的回归。
+
 
 真正画矩阵仍然建议用编辑页的 Matrix（`/admin/quizzes/create` → Logic → Archetype Matrix）：
 导入框能验，但画不出「每题 × 每个原型」的热力格子，让人以为自己配平了更危险。
@@ -311,6 +347,11 @@ npm run check:pack
 导入进来的一律是草稿（`status = draft`、`active = false`），且会顺手写
 `scoring_mode = 'axes'`（列不存在时自动剔除后重试）；去 `/admin/quizzes` 点编辑、
 在 Matrix 里复核一遍、再发布。
+
+> 不想手写 JSON 就走 AI 起草：`/admin/quizzes/create` 右上角 **AI 起草** →
+> 趋势 / 选题 / 生成 / 应用（见 `docs/quiz-ai-authoring.md`）。它最后也是往
+> 同一个 `raw_data` 里填 `archetypes` + `questions`，并且同样只填不进库 ——
+> 保存 / 发布仍然是人按。`summary`（结果页的 The Read）那段只有那条路会写。
 
 
 

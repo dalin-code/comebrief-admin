@@ -21,6 +21,7 @@ import {
   quizTopicList,
   type QuizRow,
 } from '../lib/quizStudio.ts'
+import { normalizeAxeQuiz } from '../lib/quizAxes.ts'
 
 let failed = 0
 const check = (name: string, cond: boolean, extra = '') => {
@@ -128,6 +129,67 @@ const raw = buildAxesRawData(axesRow, {
 check('5a raw_data 保留 model=axes', raw.model === 'axes')
 check('5b raw_data 保留分类', Array.isArray(raw.categories) && raw.categories[0] === 'Persona')
 check('5c raw_data 写入 archetypes/questions', raw.archetypes.length === 2 && raw.questions.length === 1)
+
+/*
+ * 5d–5g：v3 的三格元信息必须**原样穿过保存路径**。
+ *
+ * 这是这一层最容易悄悄坏掉的地方：`buildAxesRawData` 是「用编辑器状态重写
+ * archetypes/questions」，只要哪次改动忘了带上某格，作者保存一次（哪怕只改
+ * 一个错字），结果页的答案地图就会整块消失 —— 而库里的数据看起来完全正常。
+ */
+const v3Row: QuizRow = {
+  ...axesRow,
+  raw_data: {
+    ...(axesRow.raw_data as Record<string, any>),
+    axes: { x: { neg: 'Solo', pos: 'Social' }, y: { neg: 'Low-key', pos: 'Loud' } },
+  },
+}
+const v3Quiz = normalizeAxeQuiz(v3Row.raw_data)
+check('5d 归一化读得出两条轴', Boolean(v3Quiz?.quiz.axes?.x.neg === 'Solo' && v3Quiz?.quiz.axes?.y.pos === 'Loud'))
+
+const v3Raw = buildAxesRawData(v3Row, {
+  model: 'axes',
+  title: 'Axes quiz',
+  axes: v3Quiz?.quiz.axes,
+  archetypes: [
+    { id: 'a', name: 'Alpha', quadrant: 'TL', color: '#FFE45E', pose: 'worry' },
+    { id: 'b', name: 'Beta', quadrant: 'BR', color: '#6EE7B7', pose: 'wave' },
+  ],
+  questions: [
+    {
+      id: 'q1',
+      title: 'Q',
+      options: [{ id: 'o1', text: 'A', weights: { a: 3 }, intensity: 2, bold: true }],
+    },
+  ],
+})
+check('5e 保存后 axes 仍在', v3Raw.axes?.x?.pos === 'Social' && v3Raw.axes?.y?.neg === 'Low-key')
+check(
+  '5f 保存后 quadrant / color / pose 仍在',
+  v3Raw.archetypes[0].quadrant === 'TL' &&
+    v3Raw.archetypes[0].color === '#FFE45E' &&
+    v3Raw.archetypes[0].pose === 'worry'
+)
+check(
+  '5g 保存后 intensity / bold 仍在',
+  v3Raw.questions[0].options[0].intensity === 2 && v3Raw.questions[0].options[0].bold === true
+)
+
+/*
+ * 5h：没有 v3 字段的旧卷保存后也不该「长出」这些键 —— 否则第一次保存就会
+ * 给线上 20 多篇卷各塞进一堆 `axes: undefined` 形状的东西。
+ */
+const legacyQuiz = normalizeAxeQuiz(axesRow.raw_data)
+const legacyRaw = buildAxesRawData(axesRow, {
+  model: 'axes',
+  title: 'Axes quiz',
+  archetypes: legacyQuiz?.quiz.archetypes ?? [],
+  questions: legacyQuiz?.quiz.questions ?? [],
+})
+check(
+  '5h 旧卷保存后不凭空长出 axes / quadrant',
+  legacyRaw.axes === undefined && legacyRaw.archetypes.every((a: any) => a.quadrant === undefined)
+)
 
 console.log(`\n${failed === 0 ? 'ALL PASS' : `${failed} FAILED`}`)
 process.exit(failed === 0 ? 0 : 1)

@@ -38,14 +38,49 @@ export const MAX_QUESTIONS = 10
 /** 每个原型至少要被抽到 12%（再低用户会觉得「答案总是那几个」）。 */
 export const MIN_HIT_PCT = 12
 
-/** 平局率上限 8%。 */
-export const MAX_TIE_PCT = 8
+/**
+ * 平局率上限 12%。
+ *
+ * 为什么从 8% 抬到 12%（2026-11-09）：
+ *   8 题 × 4 原型 + 3/1 权重 + 轮转次权重这一结构下，平局率的下限是**算得出来的**
+ *   —— 枚举 65,536 种组合，干净卷稳定落在 9.2%，与配对方式无关。也就是说旧上限
+ *   8% 会把「结构本身合格」的卷一律判成 warning，这不是区分度问题，是阈值写错了。
+ *   6 题时平局率约 38%、完全不给次权重时约 25%，这两类才应该被这条拦住。
+ *   上限抬到 12% 之后，`scripts/check-quiz.mjs` 里那份干净卷 12 项全绿。
+ */
+export const MAX_TIE_PCT = 12
 
 /** 结果名上限：海报 / 票根在 360px 下 3 行以内（上一版丢过半个括号）。 */
 export const MAX_NAME_CHARS = 40
 
 /** matchPct 封顶 97 —— 100% 显得机械化、伪造感重（决策 2026-11-06）。 */
 export const MATCH_PCT_CAP = 97
+
+/**
+ * 结果页「答案地图」的四个角。
+ *
+ * 顺序就是参考稿 `map()` 里的 `rect` 表：`[X0,Y0]` / `[C,Y0]` / `[X0,C]` / `[C,C]`。
+ * 前台按 `quadrant` 把原型摆到角上，**不复用权重**去猜位置 —— 象限是作者写的
+ * 语义（「这批选项偏独处还是偏社交」），不是分数能反推出来的东西。
+ */
+export const AXE_QUADRANTS = ['TL', 'TR', 'BL', 'BR'] as const
+
+export type AxeQuadrant = (typeof AXE_QUADRANTS)[number]
+
+/** 吉祥物姿态，与前台 `RESULT_POSES` 同一套值。 */
+export const AXE_POSES = ['shades', 'wave', 'love', 'worry'] as const
+
+/**
+ * 两条轴的四端标签。`neg` = 坐标 −1（左 / 下），`pos` = +1（右 / 上）。
+ *
+ * 为什么标签写在卷上而不是由象限推：同一个象限在「独处/社交 × 低调/外放」里
+ * 是一个意思，在「理性/感性 × 计划/随性」里是另一个意思。推导只能得到
+ * 「哪两个原型是一侧」，说不出那一侧**叫什么**。
+ */
+export type AxeAxis = { neg: string; pos: string }
+
+export type AxeAxes = { x: AxeAxis; y: AxeAxis }
+
 
 /** 精确枚举上限。8 题 × 4 = 65,536；10 题 × 4 = 1,048,576 仍走精确。 */
 export const MAX_EXACT_COMBOS = 2_000_000
@@ -67,8 +102,33 @@ export type AxeArchetype = {
   headline?: string
   quote?: string
   stats?: string[]
+  /**
+   * 「The Read」—— 结果页正文那一段（2–3 句，讲这个人为什么会落到这一档）。
+   *
+   * 为什么单独一个字段：headline 是一句大字、quote 是一句引语、stats 是印在海报上的
+   * 四段字，都塞不下一段连续的话。AI 起草（docs/quiz-ai-authoring.md）产出的正是
+   * 这一段，而 `normalizeAxeQuiz()` 是「只认识字段」的 —— 不在这里声明，
+   * 它会被静默丢掉（真实踩过：summary 写了、存了、读回来没了）。
+   *
+   * 可选：手写卷不写它不会扣分，前台暂时也不读它（ComeBrief 侧未接）。
+   */
+  summary?: string
   /** 卡片上的小标签（≤ 4 个、每个 ≤ 18 字） */
   pills?: string[]
+  /**
+   * 结果页「答案地图」的象限（`TL` / `TR` / `BL` / `BR`）。
+   *
+   * 四个原型各占一个角，缺一个前台就退回雷达图（见 ComeBrief
+   * `lib/quiz-result.ts` 的 `deriveAnswerMap`）—— 四个角里空一个的地图比没有地图更糟。
+   */
+  quadrant?: AxeQuadrant
+  /** 象限色（`#RRGGBB`）：地图色块、配比条的段色。按象限选，不按名字选。 */
+  color?: string
+  /**
+   * 吉祥物姿态。**必须显式写**：前台的 `poseForResult()` 用 id 哈希兜底，
+   * 两个原型撞成同一张脸在地图上就是两只一样的吉祥物（真实踩过）。
+   */
+  pose?: (typeof AXE_POSES)[number]
 }
 
 export type AxeOption = {
@@ -76,6 +136,16 @@ export type AxeOption = {
   text: string
   /** 只写非 0 的格子；没写的格子按 0 算 */
   weights: AxeWeights
+  /**
+   * 这个动作本身的能量（1 几乎不动 / 2 中等 / 3 主角级动作），1–3。
+   *
+   * 结果页三块仪表里的 `Intensity` 就是「你选的选项平均有多用劲」，
+   * 缺了算不出来 → 前台整块仪表不渲染。它描述的是**选项**，不是权重：
+   * 权重说「偏哪个原型」，intensity 说「这件事本身有多费劲」。
+   */
+  intensity?: number
+  /** 「多数人不会那么选」的那一档，每题最多一个，用来算 `Bold picks`。 */
+  bold?: boolean
 }
 
 export type AxeQuestion = {
@@ -91,6 +161,11 @@ export type AxeQuiz = {
   model: typeof AXE_MODEL
   archetypes: AxeArchetype[]
   questions: AxeQuestion[]
+  /**
+   * 两条轴的四端标签。缺了 → 前台的「答案地图」不渲染（退回雷达），
+   * 因为一张没有轴名的散点图等于四个色块，读完不知道自己在哪。
+   */
+  axes?: AxeAxes
 }
 
 
@@ -109,6 +184,48 @@ const toWeight = (v: unknown): number => {
   return Math.max(0, Math.min(MAX_WEIGHT, Math.round(n)))
 }
 
+const HEX_COLOR = /^#[0-9a-f]{6}$/i
+
+/**
+ * 姿态 / 象限都过一遍白名单。
+ *
+ * 为什么不做「认不出就当没写」：`quadrant: 'TR '`（带空格）或 `'tr'`（小写）
+ * 是 AI 起草最常见的两种写法，静默丢掉之后作者会在结果页找不到地图，
+ * 而编辑器里那一格**看起来是填了的**。所以 trim + 大写 + 记一条 issue。
+ */
+const toQuadrant = (v: unknown): AxeQuadrant | null => {
+  const text = asText(v).toUpperCase()
+  return (AXE_QUADRANTS as readonly string[]).includes(text) ? (text as AxeQuadrant) : null
+}
+
+const toPose = (v: unknown): (typeof AXE_POSES)[number] | null => {
+  const text = asText(v).toLowerCase()
+  return (AXE_POSES as readonly string[]).includes(text)
+    ? (text as (typeof AXE_POSES)[number])
+    : null
+}
+
+/** `1–3` 取整夹住；给了但解析不出数字时返回 null（由调用方记 issue）。 */
+const toIntensity = (v: unknown): number | null => {
+  const n = typeof v === 'number' ? v : Number(String(v ?? '').replace(/[^\d.-]/g, ''))
+  if (!Number.isFinite(n) || n <= 0) return null
+  return Math.max(1, Math.min(3, Math.round(n)))
+}
+
+const toBold = (v: unknown): boolean | null => {
+  if (v === true || v === 1 || v === '1' || v === 'true') return true
+  if (v === false || v === 0 || v === '0' || v === 'false') return false
+  return null
+}
+
+/** 轴标签：两端都有字才算一条轴。 */
+const toAxis = (v: unknown): AxeAxis | null => {
+  if (!isPlainObject(v)) return null
+  const neg = asText(v.neg)
+  const pos = asText(v.pos)
+  return neg && pos ? { neg, pos } : null
+}
+
 /** 只认 `model === 'axes'`；旧的两套模型一律返回 false，保证零回归。 */
 export function isAxeQuiz(raw: unknown): boolean {
   return isPlainObject(raw) && raw.model === AXE_MODEL && Array.isArray(raw.questions)
@@ -119,6 +236,16 @@ export type AxeNormalizeResult = {
   /** 结构上被纠正的地方（未知原型 id、权重越界、缺名字…），给编辑器显示 */
   issues: string[]
 }
+
+/**
+ * 白名单解析器的**导出**别名：`lib/quizKit.ts` 也用它。
+ *
+ * 为什么导出而不是各写一遍：AI 起草经常把象限写成 `tr`、把姿态写成 `Shades`，
+ * 两处各有一套规则时，「向导里能过、保存到库里就丢」这种 bug 会只在一半路径上出现。
+ */
+export const parseAxeQuadrant = toQuadrant
+export const parseAxePose = toPose
+export const isAxeColor = (value: unknown): value is string => HEX_COLOR.test(asText(value))
 
 /**
  * 容忍地读一份 axes 卷。
@@ -157,7 +284,30 @@ export function normalizeAxeQuiz(raw: unknown): AxeNormalizeResult | null {
             const clamped = toWeight(n)
             if (clamped > 0) weights[id] = clamped
           }
-          return { id: asText(o.id) || `o${oi + 1}`, text: asText(o.text), weights }
+
+          const option: AxeOption = { id: asText(o.id) || `o${oi + 1}`, text: asText(o.text), weights }
+
+          // 只在作者写了的时候带上：旧卷不该被塞进一堆 `intensity: undefined`
+          // （`buildAxesRawData()` 会把整个对象写回库，undefined 会被 JSON 丢掉，
+          //  但编辑器里 `'intensity' in option` 这类判断会被带跑）。
+          if (o.intensity !== undefined && o.intensity !== null && o.intensity !== '') {
+            const intensity = toIntensity(o.intensity)
+            if (intensity === null) {
+              issues.push(`Q${qi + 1} 选项 ${oi + 1} 的 intensity 不是 1–3，已忽略`)
+            } else {
+              option.intensity = intensity
+            }
+          }
+          if (o.bold !== undefined && o.bold !== null && o.bold !== '') {
+            const bold = toBold(o.bold)
+            if (bold === null) {
+              issues.push(`Q${qi + 1} 选项 ${oi + 1} 的 bold 不是布尔值，已忽略`)
+            } else {
+              option.bold = bold
+            }
+          }
+
+          return option
         })
       return {
         id: asText(q.id) || `q${qi + 1}`,
@@ -169,15 +319,48 @@ export function normalizeAxeQuiz(raw: unknown): AxeNormalizeResult | null {
 
   const declared: AxeArchetype[] = (Array.isArray(src.archetypes) ? src.archetypes : [])
     .filter(isPlainObject)
-    .map((a: Record<string, any>, ai: number) => ({
-      id: asText(a.id) || `a${ai + 1}`,
-      name: asText(a.name) || asText(a.id) || `Archetype ${ai + 1}`,
-      short: asText(a.short) || undefined,
-      headline: asText(a.headline) || undefined,
-      quote: asText(a.quote) || undefined,
-      stats: Array.isArray(a.stats) ? a.stats.map(asText).filter(Boolean) : undefined,
-      pills: Array.isArray(a.pills) ? a.pills.map(asText).filter(Boolean) : undefined,
-    }))
+    .map((a: Record<string, any>, ai: number) => {
+      const archetype: AxeArchetype = {
+        id: asText(a.id) || `a${ai + 1}`,
+        name: asText(a.name) || asText(a.id) || `Archetype ${ai + 1}`,
+        short: asText(a.short) || undefined,
+        headline: asText(a.headline) || undefined,
+        quote: asText(a.quote) || undefined,
+        summary: asText(a.summary) || undefined,
+        stats: Array.isArray(a.stats) ? a.stats.map(asText).filter(Boolean) : undefined,
+        pills: Array.isArray(a.pills) ? a.pills.map(asText).filter(Boolean) : undefined,
+      }
+
+      // 下面三格只在写了的时候带 —— 没写的旧卷要原样存回去，不能凭空长出 `undefined`。
+      if (a.quadrant !== undefined && a.quadrant !== null && a.quadrant !== '') {
+        const quadrant = toQuadrant(a.quadrant)
+        if (quadrant === null) {
+          issues.push(
+            `原型「${archetype.name}」的 quadrant 只能是 ${AXE_QUADRANTS.join(' / ')}，已忽略`
+          )
+        } else {
+          archetype.quadrant = quadrant
+        }
+      }
+      if (a.color !== undefined && a.color !== null && a.color !== '') {
+        const color = asText(a.color)
+        if (!HEX_COLOR.test(color)) {
+          issues.push(`原型「${archetype.name}」的 color 不是 #RRGGBB，已忽略`)
+        } else {
+          archetype.color = color
+        }
+      }
+      if (a.pose !== undefined && a.pose !== null && a.pose !== '') {
+        const pose = toPose(a.pose)
+        if (pose === null) {
+          issues.push(`原型「${archetype.name}」的 pose 只能是 ${AXE_POSES.join(' / ')}，已忽略`)
+        } else {
+          archetype.pose = pose
+        }
+      }
+
+      return archetype
+    })
 
   // 没声明 archetypes：从权重表的键里推，顺序取第一次出现的顺序（稳定、可 diff）。
   let archetypes: AxeArchetype[] = declared
@@ -211,15 +394,40 @@ export function normalizeAxeQuiz(raw: unknown): AxeNormalizeResult | null {
   if (dupes.length) issues.push(`原型 id 重复：${dupes.join('、')}（只留第一个）`)
   if (!archetypes.length) issues.push('一个原型都没有：没有结果可落点')
 
-  return {
-    quiz: {
-      title: asText(src.title) || undefined,
-      model: AXE_MODEL,
-      archetypes: archetypes.filter((a, i) => ids.indexOf(a.id) === i),
-      questions,
-    },
-    issues,
+  // 结果页 v3 的「答案地图」要求四个角各有一个原型。这里只提示、不拦发布：
+  // 缺了地图会退回雷达图，是**降级**不是坏数据，所以走 issues 而不是 blocker。
+  if (archetypes.length === 4) {
+    const placed = archetypes.filter((a) => a.quadrant)
+    if (placed.length !== 4) {
+      issues.push(
+        placed.length === 0
+          ? '没有原型写 quadrant：结果页会退回雷达图（v3 的地图需要四个角各一个）'
+          : `只有 ${placed.length} / 4 个原型写了 quadrant：地图会退回雷达图`
+      )
+    } else {
+      const used = archetypes.map((a) => a.quadrant)
+      const repeated = [...new Set(used.filter((q, i) => used.indexOf(q) !== i))]
+      if (repeated.length) issues.push(`quadrant 重复：${repeated.join('、')}（地图上会叠在一起）`)
+    }
+    const uncolored = archetypes.filter((a) => !a.color)
+    if (uncolored.length) issues.push(`${uncolored.length} 个原型没有 color：地图用默认灰`)
   }
+
+  const axesSrc = isPlainObject(src.axes) ? src.axes : null
+  const axisX = axesSrc ? toAxis(axesSrc.x) : null
+  const axisY = axesSrc ? toAxis(axesSrc.y) : null
+  const axes: AxeAxes | null = axisX && axisY ? { x: axisX, y: axisY } : null
+  if (axesSrc && !axes) issues.push('axes 需要 x / y 两条轴、每条都要有 neg 与 pos 两端标签')
+
+  const quiz: AxeQuiz = {
+    title: asText(src.title) || undefined,
+    model: AXE_MODEL,
+    archetypes: archetypes.filter((a, i) => ids.indexOf(a.id) === i),
+    questions,
+  }
+  if (axes) quiz.axes = axes
+
+  return { quiz, issues }
 }
 
 /* ------------------------------------------------------------------ *

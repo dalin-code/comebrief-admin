@@ -34,6 +34,7 @@ axes 模型把这件事变成一张**能算的表**：每道题 4 个选项 × �
       "name": "The Sarcastic Meme Curator",
       "short": "Sarcastic",
       "headline": "You speak fluent irony.",
+      "summary": "You read the room before you read the message. That is why every option you picked was slightly quieter than the one before it.",
       "quote": "I'm not late, the timeline is early.",
       "stats": ["8.4k memes archived", "97% reply rate", "3 group chats on mute"],
       "pills": ["Chronically online", "Screenshot hoarder"]
@@ -56,6 +57,9 @@ axes 模型把这件事变成一张**能算的表**：每道题 4 个选项 × �
 要点：
 
 - `archetypes[].id` 是**稳定的键**，改它等于换结果；`name` 是印在海报上的名字（≤ 40 字）。
+- `archetypes[].summary` 是结果页的「The Read」那段正文（2–3 句）。前台已经支持
+  （ComeBrief `lib/quiz-result.ts` 的 `pickSummary`），但它是**可选**的：不写不扣分，
+  只是结果页少一段。AI 起草的写作要求见 `docs/quiz-ai-authoring.md`。
 - `weights` 只写非 0 的格子，没写的按 0 算；每格 0–3（`MAX_WEIGHT`）。
 - 也认 `w` 这个别名（老草稿），`weights` 优先。
 - 没写 `archetypes` 时，适配层会按选项权重里出现的键名补齐并记一条 `issues`。
@@ -97,7 +101,7 @@ axes 模型把这件事变成一张**能算的表**：每道题 4 个选项 × �
 | `reachable` | 每个原型都抽得到 | 存在命中数为 0 的原型（**死区**） | blocker | 40 |
 | `nameunique` | 结果名互不重复 | 两个原型名（trim + 小写后）相同 | blocker | 10 |
 | `minhit` | 最低命中率 ≥ 12% | 某个原型命中占比 < 12% | warning | 8 |
-| `tie` | 平局率 ≤ 8% | 平局组合占比 > 8% | warning | 10 |
+| `tie` | 平局率 ≤ 12% | 平局组合占比 > 12% | warning | 10 |
 | `balance` | 列合计不偏沉 | 极差 > `max(4, 总和 × 15%)` | warning | 6 |
 | `deadopt` | 无废选项 | 某选项对所有原型都是 0 分 | warning | 4 / 个（封顶 12） |
 | `thin` | 每题至少喂养 2 个原型 | 某题只有一个原型的权重 > 0 | warning | 6 |
@@ -119,7 +123,7 @@ axes 模型把这件事变成一张**能算的表**：每道题 4 个选项 × �
 
 | 卷 | 未通过项 | 健康分 |
 |---|---|---|
-| 8 题 × 4 原型、列配平 | 只有 `tie`（9.2%） | **90** |
+| 8 题 × 4 原型、列配平 | 无（`tie` 9.2% 已在新上限 12% 内） | **100** |
 | 上一档 + 1 个废选项 + 50 字结果名 | `tie` 12% + `deadopt` + `name` | **81**（与静态稿一致） |
 | 两列权重全 0（死区） | `reachable` 等 | **15** |
 
@@ -151,7 +155,7 @@ npm run check:quiz:file ../quiz.json     # 体检一份真卷：raw_data 对象�
 | 组 | 钉住的行为 |
 |---|---|
 | 1a–1g | 全枚举：65,536 组合、不是抽样、占比加总 100%、四个原型都抽得到、列合计 / 列满分、确定性 |
-| 2a–2e | 干净卷：零 blocker、12 项齐全、只有 `tie` 提醒、健康分 = 100 − 扣分 |
+| 2a–2e | 干净卷：零 blocker、12 项齐全、12 项全绿（`tie` 9.2% ≤ 12%）、健康分 = 100 − 扣分 |
 | 3a–3c | 死区 → `blocker`，点名是哪个原型 |
 | 4a–4b | 废选项 → `warning`，点名「Q6 选项 B」 |
 | 5a–5b | 平局率超限 → `warning`，不拦发布 |
@@ -160,16 +164,18 @@ npm run check:quiz:file ../quiz.json     # 体检一份真卷：raw_data 对象�
 | 8a–8f | `matchPct` 封顶 97、`score == maxScore`、分母只算已答题、中途退出 / 一题没答都不崩 |
 | 9a–9c | `score` / `personality` 卷不被 axes 认领，`auditAxeQuiz` 返回 `null` |
 | 10a–10d | 适配层：`w` 别名、越界夹住、未声明原型忽略、字符串权重转数字 |
+| 11a–11b | `summary`（The Read）能穿过适配层；没写的不被补成空串 |
 
 `--file` 模式的输出是给人看的：`✓` 通过、`!` 警告、`✗` blocker；有 blocker 时退出码 1，
 所以能直接塞进「发布前必须跑一次」的流程。不是 axes 卷会打印 `SKIP … 旧路径不动` 并返回 0。
 
 ## 已知偏差与待办（别当成 bug 去「修」）
 
-1. **`tie` 阈值 8% 对 8 题 × 4 原型偏严。** 这一结构下干净卷的平局率实测约 **9.2%**，
-   所以「完全干净」的卷也会稳定掉进 `warning`（健康分 90）。阈值是静态稿评审时定的
-   （屏 03 写的就是 ≤8%），这里没有偷偷改：断言 `2d` 把当前行为钉住了，
-   要动就同时改 `MAX_TIE_PCT` + 本文 + 静态稿 + 断言，别只改一处。
+1. **`tie` 阈值已从 8% 抬到 12%（2026-11-09）。** 8 题 × 4 原型 + 3/1 权重这一结构下，
+   干净卷的平局率实测稳定在 **9.2%** —— 它是结构决定的，不是作者能修的。旧阈值把
+   「结构本身合格」的卷一律判成 warning（健康分 90），那不是区分度问题，是阈值写错了。
+   现在干净卷是 **100 分**，而 6 题（38%）或完全不给次权重（25%）照样被拦住。
+   改动已同步：`MAX_TIE_PCT` / 本文 / `scripts/check-quiz.mjs` 的 `2c 2d 5a`。
 2. **前台已接 axes（P2 + P3 完成）。** `ComeBrief/lib/quiz.ts` 的 `scoreQuiz()` 现在分两路：
    `raw_data.model === "axes"` 时走 `lib/quiz-axes.ts` 的仲裁（最高分胜出、同分看声明顺序、
    不掷骰子），其余仍按 `score` 落进 `results` 的 `min ~ max` 区间。两边的分工是刻意的：

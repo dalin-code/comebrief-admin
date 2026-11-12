@@ -25,6 +25,7 @@ import {
   AXE_MODEL,
   MATCH_PCT_CAP,
   MAX_EXACT_COMBOS,
+  MAX_TIE_PCT,
   auditAxeQuiz,
   axeMatchPct,
   enumerateAxe,
@@ -85,16 +86,16 @@ check('1e 列合计均衡（每题 4 分 × 8 题 ÷ 4 列 = 32）', ARCHS.every
 check('1f 列满分 = 24（每题最高 3 分 × 8）', ARCHS.every((a) => cleanEnum.columnMax[a.id] === 24), JSON.stringify(cleanEnum.columnMax))
 check('1g 重复跑结果完全一致（确定性）', JSON.stringify(enumerateAxe(clean)) === JSON.stringify(cleanEnum))
 
-/* 2. 健康分：干净的卷零 blocker / 12 项检查都在 / 只有平局一项提醒 */
+/* 2. 健康分：干净的卷零 blocker / 12 项检查都在 / 12 项全绿（tie 9.2% ≤ 上限 12%） */
 const cleanAudit = auditAxeQuiz(clean)
 check('2a 干净卷零 blocker', cleanAudit.blockers.length === 0, JSON.stringify(cleanAudit.blockers.map((c) => c.id)))
 check('2b 干净卷 12 项检查都在', cleanAudit.checks.length === 12, String(cleanAudit.checks.length))
 const notOk = cleanAudit.checks.filter((c) => c.level !== 'ok')
-check('2c 只有 tie 一项提醒（其余 11 项全绿）', notOk.length === 1 && notOk[0].id === 'tie', notOk.map((c) => c.id).join(','))
+check('2c 干净卷 12 项全绿（无 warning）', notOk.length === 0, notOk.map((c) => c.id).join(','))
 check(
-  '2d 8 题 × 4 原型的平局率结构性高于 8%（提示阈值偏严，见 docs）',
-  cleanEnum.tiePct > 8,
-  `${cleanEnum.tiePct.toFixed(1)}%`
+  '2d 8 题 × 4 原型的平局率 9.2%，落在 8%–12% 之间（旧上限 8% 判错的就是这一类）',
+  cleanEnum.tiePct > 8 && cleanEnum.tiePct <= MAX_TIE_PCT,
+  `${cleanEnum.tiePct.toFixed(1)}% / 上限 ${MAX_TIE_PCT}%`
 )
 check(
   '2e 健康分 = 100 − 未通过项扣分之和',
@@ -125,7 +126,7 @@ check('4b 点名「Q6 选项 B」', (deadCheck.detail || '').includes('Q6 选项
 /* 5. 平局：四个原型轮流出分，平局率必然爆表 */
 const tieQuiz = buildQuiz({ questions: 6, weights: (qi, oi, ids) => ({ [ids[oi % ids.length]]: 3 }) })
 const tieEnum = enumerateAxe(tieQuiz)
-check('5a 平局率超过上限', tieEnum.tiePct > 8, `${tieEnum.tiePct.toFixed(1)}%`)
+check('5a 平局率超过上限', tieEnum.tiePct > MAX_TIE_PCT, `${tieEnum.tiePct.toFixed(1)}% > ${MAX_TIE_PCT}%`)
 check('5b 平局 → warning 且不拦发布', auditAxeQuiz(tieQuiz).checks.find((c) => c.id === 'tie').level === 'warning')
 
 /* 6. 结果名过长 / 题量不足 → 各扣分，但都不拦发布 */
@@ -192,6 +193,48 @@ check('10a `w` 别名能读', messyNorm.quiz.questions[0].options[0].weights.a =
 check('10b 越界权重被夹住并留痕', messyNorm.issues.some((i) => i.includes('越界')))
 check('10c 未声明原型被忽略并留痕', messyNorm.issues.some((i) => i.includes('未声明的原型')))
 check('10d 同名字符串权重能读成数字', messyNorm.quiz.questions[0].options[1].weights.a === 2)
+
+/* 11. summary（The Read）必须活着穿过适配层 —— 它曾因为「没在类型里声明」被静默丢掉 */
+const withSummary = buildQuiz()
+withSummary.archetypes[0].summary = 'You read the room before you read the message.'
+const summaryNorm = normalizeAxeQuiz(withSummary)
+check(
+  '11a summary 能读回来',
+  summaryNorm.quiz.archetypes[0].summary === 'You read the room before you read the message.'
+)
+check(
+  '11b 没写 summary 的原型不会被补成空串',
+  summaryNorm.quiz.archetypes[1].summary === undefined
+)
+
+/* 12. v3 的三格（象限 / 配色 / 姿态）+ 选项的两格（intensity / bold） */
+const withV3 = buildQuiz()
+withV3.axes = { x: { neg: 'Solo', pos: 'Social' }, y: { neg: 'Low-key', pos: 'Loud' } }
+withV3.archetypes[0].quadrant = 'tr'
+withV3.archetypes[0].color = '#ff8fa3'
+withV3.archetypes[0].pose = 'Shades'
+withV3.archetypes[1].quadrant = 'XX'
+withV3.archetypes[1].color = '#fff'
+withV3.archetypes[1].pose = 'none'
+withV3.questions[0].options[0].intensity = 9
+withV3.questions[0].options[1].intensity = 2
+withV3.questions[0].options[1].bold = true
+const v3Norm = normalizeAxeQuiz(withV3)
+check('12a 小写象限 / 大写姿态被规范成白名单值', v3Norm.quiz.archetypes[0].quadrant === 'TR' && v3Norm.quiz.archetypes[0].pose === 'shades')
+check('12b 十六进制颜色原样保留', v3Norm.quiz.archetypes[0].color === '#ff8fa3')
+check(
+  '12c 认不出的象限 / 短颜色 / 姿态被丢掉并留痕',
+  v3Norm.quiz.archetypes[1].quadrant === undefined &&
+    v3Norm.quiz.archetypes[1].color === undefined &&
+    v3Norm.quiz.archetypes[1].pose === undefined &&
+    v3Norm.issues.filter((i) => /quadrant|color|pose/.test(i)).length >= 3
+)
+check('12d intensity 越界被夹到 3、bold 能读', v3Norm.quiz.questions[0].options[0].intensity === 3 && v3Norm.quiz.questions[0].options[1].bold === true)
+check('12e 两条轴都齐了才会落进 quiz', v3Norm.quiz.axes?.x.neg === 'Solo' && v3Norm.quiz.axes?.y.pos === 'Loud')
+const halfAxes = buildQuiz()
+halfAxes.axes = { x: { neg: 'Solo', pos: '' }, y: { neg: 'Low-key', pos: 'Loud' } }
+const halfNorm = normalizeAxeQuiz(halfAxes)
+check('12f 半条轴不落、并留一条 issue', halfNorm.quiz.axes === undefined && halfNorm.issues.some((i) => i.includes('axes')))
 
 
 /* 真卷模式：给一份 raw_data，直接告诉你哪里会出事 */
