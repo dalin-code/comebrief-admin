@@ -82,3 +82,9 @@ jobs:
       # 敏感词过滤 / 热词抽取。**不联网**，夹具是三个源的真实响应切片。
       - name: Trend collection checks
         run: npm run check:trends
+
+      # 英文文案的机械语法闸：a/an、重复词、句首大小写、标点空格、配对符号。
+      # 与 /api/news/save、/api/admin/articles/draft、/api/ai/excerpt、
+      # /api/ai/story/finalize 共用 lib/textQuality.ts，改规则会在这里先红。
+      - name: Grammar gate checks
+        run: npm run check:grammar

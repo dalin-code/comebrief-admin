@@ -16,6 +16,11 @@ import { normalizeSkeleton } from '@/lib/storyPlan'
 import { coerceSurface } from '@/lib/storyIdentity'
 import { buildFinalizeSystemPrompt, buildFinalizeUserPrompt } from '@/lib/storyWrite'
 import { loadRecipe, saveVariant } from '@/lib/storyRecipes'
+import {
+  blockingTextIssues,
+  describeTextIssues,
+  fixArticleAgreement,
+} from '@/lib/textQuality'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -125,7 +130,18 @@ export async function POST(req: NextRequest) {
     if (!excerpt) warnings.push('模型没有给出可用摘要，已用正文开头兜底')
 
     const finalTitle = title || fallbackTitle
-    const finalExcerpt = excerpt || fallbackExcerpt
+    const finalExcerpt = fixArticleAgreement(excerpt || fallbackExcerpt)
+
+    // Chinese story copy passes through untouched; if an English excerpt was
+    // produced, reject mechanical grammar errors instead of returning it.
+    const excerptIssues = blockingTextIssues(finalExcerpt)
+    if (excerptIssues.length > 0) {
+      return jsonResponse(
+        { error: `摘要语法检查未通过：${describeTextIssues(excerptIssues)}`, issues: excerptIssues },
+        422
+      )
+    }
+
     const shareCode = hashString(`${seeds.surfaceSeed}|${skeleton.skeletonHash}`).toString(36).slice(0, 8)
 
     const sourceArticleId = body?.sourceArticleId ? String(body.sourceArticleId) : null

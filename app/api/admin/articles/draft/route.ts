@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server'
 import { isAbortError, jsonResponse, requireAdmin } from '@/lib/aiGemini'
 import { getSupabaseAdminClient } from '@/lib/supabaseAdmin'
 import { buildArticleSlug, countChineseChars, htmlToPlainText } from '@/lib/storyPrompt'
+import { blockingTextIssues, describeTextIssues } from '@/lib/textQuality'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -33,6 +34,21 @@ export async function POST(req: NextRequest) {
     const excerptZh = clean(body?.excerpt_zh ?? body?.excerpt, 800)
     const htmlZh = String(body?.content_zh_html ?? body?.html ?? '').trim()
     if (!htmlZh) return jsonResponse({ error: 'missing content_zh_html' }, 400)
+
+    const textIssues = [
+      ...blockingTextIssues(title),
+      ...blockingTextIssues(String(body?.excerpt || '')),
+    ]
+    if (textIssues.length > 0) {
+      return jsonResponse(
+        {
+          error: `Text quality check failed: ${describeTextIssues(textIssues)}`,
+          code: 'TEXT_QUALITY',
+          issues: textIssues,
+        },
+        422
+      )
+    }
 
     const storyCombo =
       body?.story_combo && typeof body.story_combo === 'object' ? (body.story_combo as Record<string, unknown>) : null

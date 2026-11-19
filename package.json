@@ -14,7 +14,8 @@
     "check:studio": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/_ts-resolve.mts scripts/check-quiz-studio.mts",
     "check:kit": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/_ts-resolve.mts scripts/check-quiz-kit.mts",
     "check:text": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/_ts-resolve.mts scripts/check-quiz-text.mts",
-    "check:trends": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/_ts-resolve.mts scripts/check-trends.mts"
+    "check:trends": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/_ts-resolve.mts scripts/check-trends.mts",
+    "check:grammar": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/_ts-resolve.mts scripts/check-grammar.mts"
   },
   "dependencies": {
     "@supabase/auth-js": "^2.102.1",

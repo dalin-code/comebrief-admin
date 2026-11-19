@@ -9,6 +9,11 @@ import {
   isMostlyChinese,
   stripCountLeak,
 } from '@/lib/storyPrompt'
+import {
+  blockingTextIssues,
+  describeTextIssues,
+  fixArticleAgreement,
+} from '@/lib/textQuality'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -69,14 +74,17 @@ export async function POST(req: NextRequest) {
     const prompt = buildExcerptPrompt({ language, title, bodyText })
 
     /** 清洗 + 修剪：模型给的原文不能直接进栏目，数数残渣、包裹、引号都要处理掉 */
-    const cleanExcerpt = (raw: string) =>
-      stripCountLeak(stripFences(raw))
+    const cleanExcerpt = (raw: string) => {
+      const text = stripCountLeak(stripFences(raw))
         .split(/\n{2,}/)[0]
         .replace(/\s*\n+\s*/g, ' ')
         .replace(/^(摘要|Summary|Excerpt)[:：]\s*/i, '')
         .replace(/^["'“”「『]|["'“”」』]$/g, '')
         .trim()
         .slice(0, language === 'en' ? 400 : 300)
+      // The one mechanical grammar fix that is safe to apply automatically.
+      return language === 'en' ? fixArticleAgreement(text) : text
+    }
 
     // 摘要是收敛型任务，温度压得很低，避免它自己编情节。
     //
@@ -104,15 +112,17 @@ export async function POST(req: NextRequest) {
         autoWaitMs: opts.model ? 0 : 8000,
       })
 
-    /** 输出验收：短得不像摘要 / 把「数字数」的过程写出来了 / 被长度上限截成半句 —— 一律不算数 */
-    const judge = (text: string, raw: string, truncated: boolean) =>
-      text.length < 20
-        ? `只有 ${text.length} 个字`
-        : isCountLeak(raw)
-          ? '把数数字的过程写出来了'
-          : truncated && text.length < 40
-            ? '被长度上限截断了'
-            : ''
+    /** 输出验收：短得不像摘要 / 把「数字数」的过程写出来了 / 被长度上限截成半句 / 英文语法不过关 —— 一律不算数 */
+    const judge = (text: string, raw: string, truncated: boolean) => {
+      if (text.length < 20) return `只有 ${text.length} 个字`
+      if (isCountLeak(raw)) return '把数数字的过程写出来了'
+      if (truncated && text.length < 40) return '被长度上限截断了'
+
+      const grammar = language === 'en' ? blockingTextIssues(text) : []
+      if (grammar.length > 0) return `语法检查未通过：${describeTextIssues(grammar, 1)}`
+
+      return ''
+    }
 
     // 同一段正文 + 同一个页签，5 分钟内再点就复用上次结果；请求体带 `fresh: true` 则强制重问。
     // 摘要属于「同样输入 → 同样输出」的任务：复用既省额度，也挡掉「以为没点着就连点三下」烧三份额度。

@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getSupabaseAdminClient } from '@/lib/supabaseAdmin'
+import { blockingTextIssues, describeTextIssues } from '@/lib/textQuality'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -42,6 +43,25 @@ export async function POST(req: NextRequest) {
     const payload = body?.payload && typeof body.payload === 'object' ? (body.payload as any) : null
     if (!payload) return new Response(JSON.stringify({ error: 'missing payload' }), { status: 400 })
     if (mode === 'update' && !id) return new Response(JSON.stringify({ error: 'missing id' }), { status: 400 })
+
+    // English title / excerpt are the two fields that surface directly in
+    // search results and Open Graph cards. Block mechanical errors here rather
+    // than letting them reach the public site; Chinese drafts pass through
+    // untouched (isEnglishText() returns false).
+    const textIssues = [
+      ...blockingTextIssues(String(payload.title || '')),
+      ...blockingTextIssues(String(payload.excerpt || '')),
+    ]
+    if (textIssues.length > 0) {
+      return new Response(
+        JSON.stringify({
+          error: `Text quality check failed: ${describeTextIssues(textIssues)}`,
+          code: 'TEXT_QUALITY',
+          issues: textIssues,
+        }),
+        { status: 422 }
+      )
+    }
 
     const adminClient = admin.client
     let current: any = payload
