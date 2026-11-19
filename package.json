@@ -18,6 +18,7 @@
     "check:grammar": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/_ts-resolve.mts scripts/check-grammar.mts"
   },
   "dependencies": {
+    "@floating-ui/dom": "^1.8.0",
     "@supabase/auth-js": "^2.102.1",
     "@supabase/functions-js": "^2.102.1",
     "@supabase/postgrest-js": "^2.102.1",
