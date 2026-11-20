@@ -635,16 +635,28 @@ export function normalizeArchetypeId(raw: unknown): string {
     .slice(0, 32)
 }
 
-const PLACEHOLDER = /^(option|choice|answer|todo|tbd|lorem ipsum|n\/a)\b/i
+/** 光杆模板壳：整串只有 `Option A` / `Choice 2` / `Answer`（末尾允许一个标点）。 */
+const PLACEHOLDER_EXACT = /^(option|choice|answer)\s*([a-d]|[1-4])?[.:;、。：]?$/i
+/** 一眼假的短词：整串就是这几个字才算，`TBD` 后面跟正文的不算。 */
+const PLACEHOLDER_WORD = /^(todo|tbd|n\/a)$/i
+/** 假文永远不可能是真文案，所以这条允许后面继续跟词。 */
+const PLACEHOLDER_PROSE = /^lorem ipsum\b/i
 
 /**
  * 一眼假的占位文案。AI 偶尔会把模板里的 "Option A" 原样吐回来，
  * 这种卷在矩阵里看起来「有字」，上前台就是四个一模一样的空壳。
+ *
+ * **只认整串，不做前缀匹配** —— `option` / `choice` / `answer` 在英文选项里
+ * 都是普通动词开头（`Answer with high energy…`、`Choice fatigue hits you first.`），
+ * 前缀匹配会把好稿子判成占位：线上就有一份 8 题的卷子因为
+ * `Answer with high energy for four minutes.` 被拦成「Q1 有空的 / 占位选项」。
  */
 function isPlaceholder(text: string): boolean {
   const t = text.trim()
   if (!t) return true
-  if (PLACEHOLDER.test(t)) return true
+  if (PLACEHOLDER_EXACT.test(t)) return true
+  if (PLACEHOLDER_WORD.test(t)) return true
+  if (PLACEHOLDER_PROSE.test(t)) return true
   if (/^(undefined|null|nan)$/i.test(t)) return true
   if (/^[a-d]$/i.test(t)) return true
   return false

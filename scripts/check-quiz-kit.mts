@@ -158,6 +158,29 @@ check(
   validateQuizKit(dupOption).blockers.some((r) => r.id === 'options')
 )
 
+/* 3e1 / 3e2：占位符判定只认「光杆模板」，别把正常的英文句子误判成占位。
+ * 线上真实事故：Q1 的 `Answer with high energy for four minutes.` 命中了
+ * 旧版前缀正则 `^answer\b`，整份 8 题的好稿子被拦成「1 项要修」。 */
+const optionsBlockedWith = (text: string) => {
+  const kit = buildKit()
+  kit.questions[0].options[3].text = text
+  return validateQuizKit(kit).blockers.some((r) => r.id === 'options')
+}
+
+const realSentences = ['Answer with high energy for four minutes.', 'Answer the call, then go quiet.']
+check(
+  '3e1 以 Answer 开头的真实选项不算占位',
+  realSentences.every((text) => !optionsBlockedWith(text)),
+  realSentences.filter((text) => optionsBlockedWith(text)).join(' / ')
+)
+
+const shells = ['Option A', 'Choice 2', 'Answer', 'Answer B.', 'TBD', 'lorem ipsum dolor sit amet', 'n/a', 'A']
+check(
+  '3e2 光杆占位文案仍然被拦',
+  shells.every((text) => optionsBlockedWith(text)),
+  shells.filter((text) => !optionsBlockedWith(text)).join(' / ')
+)
+
 const badMapping = buildKit()
 badMapping.questions[2].options[3].primary = badMapping.questions[2].options[0].primary
 const badMappingValidation = validateQuizKit(badMapping)
