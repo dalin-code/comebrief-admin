@@ -25,6 +25,10 @@
 // CI 的 check:quiz 必须同一个判据，否则「本地绿、线上红」只是时间问题）。
 // 无扩展名导入是本项目约定；跑脚本时用 `node --import ./scripts/_ts-resolve.mts`。
 import { axeChecks, enumerateAxe, normalizeAxeQuiz } from './quizAxes'
+// 分类按钮的候选值只有一份真源：`lib/quizKit` 的 6 个话题（与 quiz_topics 表、
+// 前台 /quizzes 页签同词）。以前这里还写死过一份 ['Persona', …]，两边各改一次
+// 就会出现「前台 10 个页签、后台 4 个按钮」。
+import { QUIZ_CATEGORY_ORDER } from './quizKit'
 
 export type QuizModel = 'score' | 'personality' | 'axes'
 
@@ -79,13 +83,17 @@ export type QuizPackInspection = {
   error?: QuizPackParseError
 }
 
-/** 编辑器里预置的分类按钮（新增分类要在那个页面加，不然点不到） */
-export const QUIZ_CATEGORIES = ['Persona', 'Subconscious', 'Social', 'Future'] as const
+/**
+ * 编辑器里预置的分类按钮 —— 与 `quiz_topics` / 前台页签同一份词表
+ * （`lib/quizKit` 的 `QUIZ_TOPICS`，顺序即展示顺序）。
+ */
+export const QUIZ_CATEGORIES: readonly string[] = QUIZ_CATEGORY_ORDER
 
 /** 编辑器里预置的运营标签 */
 export const QUIZ_TAGS = ['hot', 'featured', 'hardcore'] as const
 
-export const DEFAULT_CATEGORY = 'Persona'
+/** 没写分类时的默认值（最「万能」的一档：原型 / 人设类卷最多）。 */
+export const DEFAULT_CATEGORY = 'Personality'
 
 const isPlainObject = (v: any): boolean =>
   v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -487,7 +495,7 @@ export function validatePack(quiz: any): QuizPackIssue[] {
 
   if (quiz.categories !== undefined) {
     if (!Array.isArray(quiz.categories)) {
-      add('categories', 'categories 必须是数组，例如 ["Persona"]')
+      add('categories', 'categories 必须是数组，例如 ["Personality"]')
     } else {
       const unknown = quiz.categories.filter(
         (c: any) => typeof c === 'string' && c.trim() && !(QUIZ_CATEGORIES as readonly string[]).includes(c.trim())
@@ -495,7 +503,7 @@ export function validatePack(quiz: any): QuizPackIssue[] {
       if (unknown.length) {
         add(
           'categories',
-          `分类 ${unknown.join('、')} 不在编辑器预置列表（${QUIZ_CATEGORIES.join(' / ')}）里 —— 能存，但后台分类按钮点不到它`,
+          `分类 ${unknown.join('、')} 不在统一词表（${QUIZ_CATEGORIES.join(' / ')}）里 —— 能存，但前台会因此多出一个页签`,
           'warning'
         )
       }
@@ -852,7 +860,7 @@ export const QUIZ_PACK_DOC_PATH = 'docs/quiz-json-format.md'
 export const SCORE_TEMPLATE = `{
   "title": "你是哪种恋爱类型",
   "model": "score",
-  "categories": ["Persona"],
+  "categories": ["Personality"],
   "tags": [],
   "cover_url": "",
   "is_limited": false,

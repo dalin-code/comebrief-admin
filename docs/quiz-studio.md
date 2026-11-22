@@ -45,6 +45,39 @@
 - 主题页不存在「跑归并脚本」这一步：改 `quizzes.categories`，列表、主题页、sitemap
   会一起变。全中文分类没有可用 slug，不会生成主题页。
 
+## 分类词表（2026-11-22 统一）
+
+后台分类按钮、前台 `/quizzes` 页签、`/quizzes/topic/<slug>`、`quiz_topics` 表现在是
+**同一份 6 个分类**，顺序固定：
+
+| # | 分类 | slug | 旧词（只做反查，不再写库） |
+|---|---|---|---|
+| 1 | `Career` | `career` | Future / Work |
+| 2 | `Personality` | `personality` | Persona / Archetypes / MBTI |
+| 3 | `Pop Culture` | `pop-culture` | Sports / Entertainment / Trivia & Knowledge / Technology |
+| 4 | `Relationships` | `relationships` | Social / Love / Dating |
+| 5 | `Lifestyle` | `lifestyle` | Lifestyle & Aesthetics / Aesthetics |
+| 6 | `Mindset` | `mindset` | Subconscious / Mental / Emotions |
+
+- 候选值只有一份真源：`lib/quizKit.ts` 的 `QUIZ_TOPICS` → `QUIZ_CATEGORY_ORDER`；
+  编辑器按钮（`lib/quizPack.ts` 的 `QUIZ_CATEGORIES`）与分类屏（`quizTopicList()`）都取它。
+- 打开旧卷时，不在表内的分类值会**补在按钮列表末尾**，仍然可见、可点掉 ——
+  不会出现「已选分类指向一个不存在的按钮」。
+- 历史脏值（例如手打错字）在分类屏里垫底，等人工归并；不自动改写。
+
+## 原型卷打开时的提示（红框已修）
+
+`normalizeAxeQuiz()` 把结果分成两份：
+
+| 字段 | 含义 | 编辑器行为 |
+|---|---|---|
+| `issues` | **真的改了数据**（权重越界夹住、未知原型 id 丢弃、名字补全…） | 绿色提示条「已自动纠正 N 处」 |
+| `advisories` | 只提示、没动数据（缺 quadrant → 结果页退回雷达图） | 不弹条，避免合法卷一打开就是红色警告 |
+
+另外：原型只写了 `quadrant`、没写 `color` 时，归一化阶段就按象限补
+`AXE_QUADRANT_COLORS`（与前台 `lib/quiz-result.ts` 的兜底色同值），
+所以「N 个原型没有 color」这条提示已经不存在了。
+
 ## 自动生成（Autopilot）没有接
 
 静态稿的第 5 屏是一条完整 AI 流水线。当前后台没有接生成任务，所以「待放行」屏

@@ -44,7 +44,7 @@
 {
   "title": "你是哪种恋爱类型",
   "model": "score",
-  "categories": ["Persona"],
+  "categories": ["Personality"],
   "tags": [],
   "cover_url": "",
   "is_limited": false,
@@ -109,7 +109,7 @@
 |---|---|---|
 | `title` | ✅ | 列表页标题，不能为空/空白 |
 | `model` | ✅ | `score`（累加分，默认）、`personality`（按 tag 计数）或 `axes`（原型矩阵，见 `docs/quiz-axes.md`） |
-| `categories` | 建议 | 数组。编辑器预置 `Persona` / `Subconscious` / `Social` / `Future`；不写按 `["Persona"]` 存 |
+| `categories` | 建议 | 数组。统一词表 `Career` / `Personality` / `Pop Culture` / `Relationships` / `Lifestyle` / `Mindset`；不写按 `["Personality"]` 存。旧词（Persona / Sports / Social / Future / Subconscious）仍能存，前台会把它当独立页签 |
 | `tags` | 否 | `hot` / `featured` / `hardcore` 的子集；其它值能存，但后台没有对应按钮 |
 | `cover_url` | 否 | 封面 URL；留 `""`，导入后在编辑页上传 |
 | `is_limited` | 否 | `true` / `false`，前台的 Limited 角标 |

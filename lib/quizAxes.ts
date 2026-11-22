@@ -67,6 +67,23 @@ export const AXE_QUADRANTS = ['TL', 'TR', 'BL', 'BR'] as const
 
 export type AxeQuadrant = (typeof AXE_QUADRANTS)[number]
 
+/**
+ * 象限兜底色 —— 与 ComeBrief `lib/quiz-result.ts` 的 `QUADRANT_FALLBACK_COLOR`
+ * **逐像素相同**（改色必须两边一起改）。
+ *
+ * 为什么在归一化阶段就补上，而不是等前台渲染时兜底：
+ *   AI 起草 / 手写文本经常只写 `quadrant` 不写 `color`，旧逻辑会在编辑器里报
+ *   「N 个原型没有 color」并把整条提示当错误弹成红条 —— 但数据其实没错，前台
+ *   本来就有同一组兜底色。在这里补齐，提示消失、地图照常上色，存回去的
+ *   raw_data 也自带颜色（下次打开不必再补）。
+ */
+export const AXE_QUADRANT_COLORS: Record<AxeQuadrant, string> = {
+  TL: '#FFE45E',
+  TR: '#FF8FA3',
+  BL: '#8C93FF',
+  BR: '#6EE7B7',
+}
+
 /** 吉祥物姿态，与前台 `RESULT_POSES` 同一套值。 */
 export const AXE_POSES = ['shades', 'wave', 'love', 'worry'] as const
 
@@ -235,6 +252,14 @@ export type AxeNormalizeResult = {
   quiz: AxeQuiz
   /** 结构上被纠正的地方（未知原型 id、权重越界、缺名字…），给编辑器显示 */
   issues: string[]
+  /**
+   * 只提示、**没有改动数据**的降级项（缺象限 → 结果页退回雷达图）。
+   *
+   * 与 `issues` 分开的原因：编辑器只把 `issues` 弹成「已自动纠正」的提示条。
+   * 混在一起的话，一份完全合法的卷（只是没写象限）打开就是一条红色警告 ——
+   * 2026-11-22 后台那个红框就是这么来的。
+   */
+  advisories: string[]
 }
 
 /**
@@ -261,6 +286,7 @@ export function normalizeAxeQuiz(raw: unknown): AxeNormalizeResult | null {
   if (!isAxeQuiz(raw)) return null
   const src = raw as Record<string, any>
   const issues: string[] = []
+  const advisories: string[] = []
 
   const questions: AxeQuestion[] = (src.questions as any[])
     .filter(isPlainObject)
@@ -359,6 +385,12 @@ export function normalizeAxeQuiz(raw: unknown): AxeNormalizeResult | null {
         }
       }
 
+      // 只写了象限、没写颜色：按象限补上兜底色（与前台 `slotColor()` 同一组色值）。
+      // 补上就不算问题 —— 前台本来就会这么画，这里只是把它固化进 raw_data。
+      if (archetype.quadrant && !archetype.color) {
+        archetype.color = AXE_QUADRANT_COLORS[archetype.quadrant]
+      }
+
       return archetype
     })
 
@@ -394,12 +426,12 @@ export function normalizeAxeQuiz(raw: unknown): AxeNormalizeResult | null {
   if (dupes.length) issues.push(`原型 id 重复：${dupes.join('、')}（只留第一个）`)
   if (!archetypes.length) issues.push('一个原型都没有：没有结果可落点')
 
-  // 结果页 v3 的「答案地图」要求四个角各有一个原型。这里只提示、不拦发布：
-  // 缺了地图会退回雷达图，是**降级**不是坏数据，所以走 issues 而不是 blocker。
+  // 结果页 v3 的「答案地图」要求四个角各有一个原型。缺了地图会退回雷达图 ——
+  // 这是**降级**不是坏数据，所以进 `advisories`（提示，不冒充「已纠正」）。
   if (archetypes.length === 4) {
     const placed = archetypes.filter((a) => a.quadrant)
     if (placed.length !== 4) {
-      issues.push(
+      advisories.push(
         placed.length === 0
           ? '没有原型写 quadrant：结果页会退回雷达图（v3 的地图需要四个角各一个）'
           : `只有 ${placed.length} / 4 个原型写了 quadrant：地图会退回雷达图`
@@ -407,10 +439,8 @@ export function normalizeAxeQuiz(raw: unknown): AxeNormalizeResult | null {
     } else {
       const used = archetypes.map((a) => a.quadrant)
       const repeated = [...new Set(used.filter((q, i) => used.indexOf(q) !== i))]
-      if (repeated.length) issues.push(`quadrant 重复：${repeated.join('、')}（地图上会叠在一起）`)
+      if (repeated.length) advisories.push(`quadrant 重复：${repeated.join('、')}（地图上会叠在一起）`)
     }
-    const uncolored = archetypes.filter((a) => !a.color)
-    if (uncolored.length) issues.push(`${uncolored.length} 个原型没有 color：地图用默认灰`)
   }
 
   const axesSrc = isPlainObject(src.axes) ? src.axes : null
@@ -427,7 +457,7 @@ export function normalizeAxeQuiz(raw: unknown): AxeNormalizeResult | null {
   }
   if (axes) quiz.axes = axes
 
-  return { quiz, issues }
+  return { quiz, issues, advisories }
 }
 
 /* ------------------------------------------------------------------ *

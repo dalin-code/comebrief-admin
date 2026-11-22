@@ -52,6 +52,23 @@ check(
   publicTopicUrl('Pop Culture')
 )
 
+/* 2d：分类屏的顺序必须与前台页签一致，历史脏值垫底等人工归并 */
+const orderedRows: QuizRow[] = [
+  { id: 'o1', title: 'A', categories: ['Mindset'] },
+  { id: 'o2', title: 'B', categories: ['Sports'] },
+  { id: 'o3', title: 'C', categories: ['Career'] },
+  { id: 'o4', title: 'D', categories: ['Lifestyle'] },
+]
+check(
+  '2d topic 按统一词表排序，未知分类垫底',
+  quizTopicList(orderedRows)
+    .map((topic) => topic.label)
+    .join('|') === 'Career|Lifestyle|Mindset|Sports',
+  quizTopicList(orderedRows)
+    .map((topic) => topic.label)
+    .join('|')
+)
+
 /* 3. 旧卷健康分：结构完整 = 100；缺题 = blocker；axes = 走 audit */
 const legacy: QuizRow = {
   id: 'legacy',
@@ -190,6 +207,50 @@ check(
   '5h 旧卷保存后不凭空长出 axes / quadrant',
   legacyRaw.axes === undefined && legacyRaw.archetypes.every((a: any) => a.quadrant === undefined)
 )
+
+/*
+ * 6. 缺 color 的原型：按象限补兜底色，且**不冒充「已纠正」**
+ *
+ * 2026-11-22 的事故：4 篇原型卷只写了 quadrant、没写 color，编辑器把
+ * 「N 个原型没有 color」当错误弹了红条 —— 但前台本来就有同一组兜底色。
+ * 现在归一化阶段就补齐；真正没改数据的降级（缺象限）走 advisories。
+ */
+const uncolored = normalizeAxeQuiz({
+  title: 'Uncolored',
+  model: 'axes',
+  archetypes: [
+    { id: 'a', name: 'A', quadrant: 'TL' },
+    { id: 'b', name: 'B', quadrant: 'TR' },
+    { id: 'c', name: 'C', quadrant: 'BL' },
+    { id: 'd', name: 'D', quadrant: 'BR' },
+  ],
+  questions: [{ id: 'q1', title: 'Q', options: [{ id: 'o1', text: 'x', weights: { a: 3 } }] }],
+})
+check(
+  '6a 缺 color 时按象限补兜底色（与前台 slotColor 同色）',
+  uncolored?.quiz.archetypes.map((a) => a.color).join('|') ===
+    '#FFE45E|#FF8FA3|#8C93FF|#6EE7B7',
+  uncolored?.quiz.archetypes.map((a) => a.color).join('|')
+)
+check('6b 补色不算问题（issues 里不再出现 color）', !uncolored?.issues.some((i) => i.includes('color')))
+
+const noQuadrant = normalizeAxeQuiz({
+  title: 'No quadrant',
+  model: 'axes',
+  archetypes: [
+    { id: 'a', name: 'A' },
+    { id: 'b', name: 'B' },
+    { id: 'c', name: 'C' },
+    { id: 'd', name: 'D' },
+  ],
+  questions: [{ id: 'q1', title: 'Q', options: [{ id: 'o1', text: 'x', weights: { a: 3 } }] }],
+})
+check(
+  '6c 缺象限只进 advisories，不进 issues（否则打开就弹红条）',
+  noQuadrant?.issues.length === 0 && (noQuadrant?.advisories.length ?? 0) === 1,
+  `issues=${JSON.stringify(noQuadrant?.issues)} advisories=${JSON.stringify(noQuadrant?.advisories)}`
+)
+check('6d 没有象限时不硬塞颜色', noQuadrant?.quiz.archetypes.every((a) => a.color === undefined))
 
 console.log(`\n${failed === 0 ? 'ALL PASS' : `${failed} FAILED`}`)
 process.exit(failed === 0 ? 0 : 1)

@@ -39,7 +39,7 @@ npm run check:quiz     # axes 引擎（原有）
 | 模型给每个选项写 0–3 权重 | 模型只给 `primary`，权重由代码算 | 模型每天都会写出「某列全 0」「15/15/1/1」这类**静默**故障；枚举才会发现，但那时已经上线 |
 | `tieBreak: most recent` | 平局取 `archetypes` 声明顺序靠前者 | 两套并列会让「枚举说 20%，线上 19%」；`scoreByArchetype()` 与 `enumerateAxe()` 必须同源 |
 | `matchPct` 可到 100% | 封顶 97（`MATCH_PCT_CAP`） | 100% 显得机械化、伪造感重（2026-11-06 决策） |
-| 新造一套分类词表 | 用 `50_quiz_taxonomy.sql` 的 6 话题 / 16 标签，写库仍写旧词 | 前台 `lib/result-theme.ts` 按 `categories[0]` 挑配色，换词会让存量卷配色与「相关测验」一起错位 |
+| 新造一套分类词表 | 用 `50_quiz_taxonomy.sql` 的 6 话题 / 16 标签，写库也写这 6 个话题名 | 2026-11-22 起 `categories` 与 `quiz_topics.name` 是同一套词，前后台页签 / 配色 / 相关测验因此不会再错位 |
 
 **权重规则只有两条**：
 
@@ -112,15 +112,17 @@ npm run check:quiz     # axes 引擎（原有）
 
 `compileQuizKit()` 产出 `model: 'axes'` 的正文：`archetypes` 原样带过去（含 `summary`），
 `questions[].options[].weights` 变成 `{ 主原型: 3, 次原型: 1 }`，选项 id 固定 `a/b/c/d`，
-题目 id 固定 `q1…q8`。分类写**旧词汇**（`topicToCategories`）：
+题目 id 固定 `q1…q8`。分类写**统一词表**的展示名（`topicToCategories`，与后台分类按钮 /
+前台页签 / `quiz_topics.name` 同一份）：
 
-| 话题 | 写进 `categories` |
-|---|---|
-| personality | `Persona` |
-| pop-culture | `Sports` |
-| love | `Social` |
-| career | `Future` |
-| lifestyle / trivia | 话题全名（旧词表没有对应档） |
+| 话题 key | 写进 `categories` | 认得的旧词（只做反查） |
+|---|---|---|
+| career | `Career` | Future / Work / Job |
+| personality | `Personality` | Persona / Archetypes / MBTI |
+| pop-culture | `Pop Culture` | Sports / Entertainment / Trivia & Knowledge / Technology |
+| relationships | `Relationships` | Social / Love / Dating |
+| lifestyle | `Lifestyle` | Lifestyle & Aesthetics / Aesthetics |
+| mindset | `Mindset` | Subconscious / Mental / Emotions |
 
 ---
 

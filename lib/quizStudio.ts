@@ -26,6 +26,8 @@ import {
   type AxeCheck,
   type AxeQuiz,
 } from './quizAxes'
+// 分类屏 / 页签的展示顺序与 `quiz_topics` 同源（lib/quizKit 的 QUIZ_TOPICS）。
+import { QUIZ_CATEGORY_ORDER } from './quizKit'
 
 /** 一条 quizzes 行。字段都按「可能缺列」处理：阶段 0 的 SQL 不一定跑过。 */
 export type QuizRow = {
@@ -147,7 +149,20 @@ export type QuizTopic = {
   count: number
 }
 
-/** 全量话题（按数量降序、同数量按名字升序），与前台主题页 / sitemap 同源规则。 */
+/** 统一词表里的位次；不在表内的历史分类排在最后（同组内再按数量 / 名字）。 */
+function categoryRank(label: string): number {
+  const wanted = label.trim().toLowerCase()
+  const index = QUIZ_CATEGORY_ORDER.findIndex((name) => name.toLowerCase() === wanted)
+  return index === -1 ? QUIZ_CATEGORY_ORDER.length : index
+}
+
+/**
+ * 全量话题（先按统一词表的顺序，再按数量降序、同数量按名字升序）。
+ *
+ * 顺序必须与前台 `/quizzes` 页签一致（6 个分类 Career → Mindset）：
+ * 分类屏是第一屏，页签顺序在后台和前台不一样的话，「第 3 个分类」指的会是
+ * 两个不同的东西。未知分类（历史脏值）垫底，等人工归并。
+ */
 export function quizTopicList(rows: readonly QuizRow[]): QuizTopic[] {
   const bySlug = new Map<string, QuizTopic>()
 
@@ -169,7 +184,10 @@ export function quizTopicList(rows: readonly QuizRow[]): QuizTopic[] {
   }
 
   return Array.from(bySlug.values()).sort(
-    (a, b) => b.count - a.count || a.label.localeCompare(b.label)
+    (a, b) =>
+      categoryRank(a.label) - categoryRank(b.label) ||
+      b.count - a.count ||
+      a.label.localeCompare(b.label)
   )
 }
 

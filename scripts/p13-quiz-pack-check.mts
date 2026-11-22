@@ -101,7 +101,7 @@ const normalized = normalizePack({
   results: [{ title: 'r', min_score: '1', max_score: '3' }],
 })
 check('6a model 默认 score', normalized.model === 'score')
-check('6b categories 默认 Persona', JSON.stringify(normalized.categories) === '["Persona"]')
+check('6b categories 默认 Personality', JSON.stringify(normalized.categories) === '["Personality"]')
 check('6c tags / cover_url / is_limited 补齐', JSON.stringify(normalized.tags) === '[]' && normalized.cover_url === '' && normalized.is_limited === false)
 check('6d 题目 / 选项 / 结果 id 自动补', normalized.questions[0].id === 'q1' && normalized.questions[0].options[0].id === 'o1' && normalized.results[0].id === 'r1')
 check('6e weight 默认 1', normalized.questions[0].weight === 1)

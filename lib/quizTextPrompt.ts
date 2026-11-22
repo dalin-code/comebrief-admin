@@ -25,7 +25,7 @@ Output rules:
 /** 模板语法（和 `QUIZ_TEXT_TEMPLATE` 一一对应；解析器在 lib/quizText.ts）。 */
 const GRAMMAR = `TITLE: <one line, max 80 chars>
 HOOK: <one line, max 160 chars>
-TOPIC: <one of: pop-culture, internet-life, work-study, relationships, identity, future>
+TOPIC: <one of: career, personality, pop-culture, relationships, lifestyle, mindset>
 TAGS: <1–3 tags separated by " / ">
 AXIS X: <low end> ←→ <high end>
 AXIS Y: <low end> ←→ <high end>

@@ -94,7 +94,7 @@ check(
   hitPcts.length === 4 && hitPcts.every((pct) => pct >= MIN_HIT_PCT),
   hitPcts.map((pct) => `${pct.toFixed(1)}%`).join(' / ')
 )
-check('编译：分类落到旧词汇 Sports', JSON.stringify(compiled?.categories) === '["Sports"]', JSON.stringify(compiled?.categories))
+check('编译：分类落到统一词表 Pop Culture', JSON.stringify(compiled?.categories) === '["Pop Culture"]', JSON.stringify(compiled?.categories))
 check('编译：标签认得出 Internet Lore', JSON.stringify(compiled?.tags) === '["Internet Lore"]', JSON.stringify(compiled?.tags))
 check('编译：model 是 axes', compiled?.quiz.model === 'axes')
 check('契约：5 条规则里没有 warning', kit ? validateTextKit(kit).warnings.length === 0 : false)

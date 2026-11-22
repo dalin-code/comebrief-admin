@@ -149,7 +149,7 @@ export default function QuizStudioFront({ rows }: { rows: QuizRow[] }) {
       </div>
 
       <p className="px-2 text-[9px] font-bold uppercase leading-relaxed tracking-widest text-slate-300">
-        主题地址：{publicTopicUrl('Persona')} · 只有 ≥ 1 条可见测验的主题才能打开。
+        主题地址：{publicTopicUrl('Personality')} · 只有 ≥ 1 条可见测验的主题才能打开。
       </p>
     </div>
   )

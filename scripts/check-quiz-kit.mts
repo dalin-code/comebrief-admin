@@ -13,6 +13,7 @@
 
 import {
   KIT_QUESTIONS,
+  QUIZ_CATEGORY_ORDER,
   QUIZ_TOPICS,
   normalizeQuizKit,
   readQuizKit,
@@ -93,14 +94,38 @@ check('1b 旧分类别名能认（Sports → pop-culture）', resolveQuizTopic('
 check('1c 话题全名能认', resolveQuizTopic('Personality & Psychology')?.key === 'personality')
 check('1d 认不出的分类返回 null', resolveQuizTopic('Underwater Basket Weaving') === null)
 check(
-  '1e 写库仍然用旧分类值（前台配色依赖它）',
-  JSON.stringify(topicToCategories(resolveQuizTopic('pop-culture'))) === '["Sports"]'
+  '1e 写库写统一词表里的展示名（Pop Culture）',
+  JSON.stringify(topicToCategories(resolveQuizTopic('pop-culture'))) === '["Pop Culture"]'
 )
 check(
-  '1f lifestyle 没有旧词时写全名',
-  topicToCategories(resolveQuizTopic('lifestyle'))[0] === 'Lifestyle & Aesthetics'
+  '1f lifestyle 写的就是展示名',
+  topicToCategories(resolveQuizTopic('lifestyle'))[0] === 'Lifestyle'
 )
 check('1g 标签别名能认（Kpop → K-Pop）', resolveQuizTag('Kpop')?.name === 'K-Pop')
+
+/* 1h 旧词表全部有归属（2026-11-22 统一成 6 个分类，旧词只留在 aliases 里） */
+const legacyMap: [string, string][] = [
+  ['Persona', 'personality'],
+  ['Subconscious', 'mindset'],
+  ['Social', 'relationships'],
+  ['Sports', 'pop-culture'],
+  ['Future', 'career'],
+  ['Trivia & Knowledge', 'pop-culture'],
+  ['Lifestyle & Aesthetics', 'lifestyle'],
+]
+check(
+  '1h 7 个旧分类词都能落到新词表',
+  legacyMap.every(([legacy, key]) => resolveQuizTopic(legacy)?.key === key),
+  legacyMap
+    .map(([legacy]) => `${legacy} → ${resolveQuizTopic(legacy)?.key ?? 'null'}`)
+    .join(' / ')
+)
+check(
+  '1i 展示顺序就是 6 个分类（Career → Mindset）',
+  QUIZ_CATEGORY_ORDER.join('|') ===
+    'Career|Personality|Pop Culture|Relationships|Lifestyle|Mindset',
+  QUIZ_CATEGORY_ORDER.join('|')
+)
 
 /* 2. 适配层：容忍地读 */
 const messy = normalizeQuizKit({
@@ -227,7 +252,7 @@ check(
   IDS.every((id) => compiled.audit?.enumeration.columnTotals[id] === 32),
   JSON.stringify(compiled.audit?.enumeration.columnTotals)
 )
-check('4h 分类写旧词', compiled.categories.join('|') === 'Sports')
+check('4h 分类写统一词表（Pop Culture）', compiled.categories.join('|') === 'Pop Culture')
 check('4i summary 活着穿过编译', compiled.quiz.archetypes[0].summary === clean.archetypes[0].summary)
 
 const summary = summarizeCompiled(compiled)

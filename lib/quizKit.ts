@@ -15,10 +15,10 @@
  *      `lib/quizAxes.ts` 的规则是「平局取声明顺序靠前者」；两套并列会让
  *      「枚举说 20%，线上却是 19%」。这里只保留后者。
  *   ③ **matchPct 不给 100%。** 沿用 `MATCH_PCT_CAP = 97`（伪造感太重的实际反馈）。
- *   ④ **分类词表不新造。** 直接用 `../ComeBrief/supabase/50_quiz_taxonomy.sql` 里
- *      那 6 个话题 + 16 个标签，并且仍然写出旧分类值（Persona / Sports / Social /
- *      Future）—— 前台 `lib/result-theme.ts` 靠 categories[0] 挑配色，换词汇会让
- *      存量卷的配色与「相关测验」一起错位。
+ *   ④ **分类词表只有一份。** 直接用 `../ComeBrief/supabase/50_quiz_taxonomy.sql` 里
+ *      那 6 个话题 + 16 个标签，写库也写这 6 个话题名（2026-11-22 统一之后，
+ *      `quizzes.categories` 与 `quiz_topics.name` 是同一套词，不再有「旧词表」）。
+ *      前后台同时认这 6 个词，所以换词不会让配色与「相关测验」错位。
  *
  * 这个文件只做三件事：**认得出**（normalize）、**判得准**（validate）、
  * **翻译得过去**（`topicToCategories()`；权重与 id 的落到 `lib/quizCompile.ts`）。
@@ -60,12 +60,12 @@ export const KIT_MAX_QUOTE_CHARS = 140
  * ------------------------------------------------------------------ */
 
 export type QuizTopicKey =
+  | 'career'
   | 'personality'
   | 'pop-culture'
-  | 'love'
-  | 'career'
+  | 'relationships'
   | 'lifestyle'
-  | 'trivia'
+  | 'mindset'
 
 export type QuizTopicDef = {
   key: QuizTopicKey
@@ -74,73 +74,111 @@ export type QuizTopicDef = {
   name: string
   blurb: string
   color: string
-  /** 旧分类值（quizzes.categories 的词汇）：前台配色依赖它，不能换 */
-  legacy: string | null
-  /** 旧分类名 / 常见叫法的反查表（大小写不敏感） */
+  /** 旧分类名 / 常见叫法的反查表（大小写不敏感）—— 统一词表后只剩这一张表 */
   aliases: string[]
 }
 
 /**
  * 6 个话题。**顺序即优先级**：AI 给的分类词命中多个时取靠前的。
- * `legacy: null` 的两个（lifestyle / trivia）在旧词表里没有对应档，
- * 写库时直接写 `name` —— 与 SQL 里双写触发器的行为一致。
+ *
+ * 2026-11-22：与前台 `lib/categories.ts` / `quiz_topics` 表统一成同一份词表后，
+ * `name` 就是写进 `quizzes.categories` 的值（触发器镜像的 `legacy_name` 也是它），
+ * 所以这里**不再维护第二套「旧词」**—— 旧词（Persona / Sports / Social / Future /
+ * Subconscious / Trivia & Knowledge…）全部沉到 `aliases` 里，只负责「认得出」。
  */
 export const QUIZ_TOPICS: QuizTopicDef[] = [
   {
+    key: 'career',
+    slug: 'career',
+    name: 'Career',
+    blurb: 'Work, productivity, leadership, side hustles, and the Sunday-night dread.',
+    color: '#0E2A3A',
+    aliases: [
+      'career',
+      'future',
+      'work',
+      'job',
+      'jobs',
+      'workplace',
+      'leadership',
+      'productivity',
+      'career & workstyle',
+    ],
+  },
+  {
     key: 'personality',
     slug: 'personality',
-    name: 'Personality & Psychology',
-    blurb: 'Archetypes, attachment styles, and the parts of you that answer before you do.',
+    name: 'Personality',
+    blurb: 'Archetypes, personas, and the parts of you that answer before you do.',
     color: '#F5C84C',
-    legacy: 'Persona',
-    aliases: ['persona', 'subconscious', 'psychology', 'mbti', 'personality & psychology'],
+    aliases: [
+      'personality',
+      'persona',
+      'archetype',
+      'archetypes',
+      'mbti',
+      'psychology',
+      'personality & psychology',
+    ],
   },
   {
     key: 'pop-culture',
     slug: 'pop-culture',
-    name: 'Pop Culture & Entertainment',
-    blurb: "K-Pop, anime, film, and the internet's current obsession.",
+    name: 'Pop Culture',
+    blurb: "Memes, film, sports gossip, and the internet's current obsession.",
     color: '#FF6B3D',
-    legacy: 'Sports',
-    aliases: ['sports', 'pop culture', 'entertainment', 'anime', 'film', 'pop-culture'],
+    aliases: [
+      'pop culture',
+      'pop-culture',
+      'sports',
+      'sport',
+      'entertainment',
+      'anime',
+      'film',
+      'trivia',
+      'knowledge',
+      'trivia & knowledge',
+      'technology',
+      'tech',
+    ],
   },
   {
-    key: 'love',
-    slug: 'love',
-    name: 'Love & Relationships',
+    key: 'relationships',
+    slug: 'relationships',
+    name: 'Relationships',
     blurb: 'Green flags, red flags, and the group chat you call a support system.',
     color: '#CDBBFF',
-    legacy: 'Social',
-    aliases: ['social', 'relationships', 'dating', 'love & relationships'],
-  },
-  {
-    key: 'career',
-    slug: 'career',
-    name: 'Career & Workstyle',
-    blurb: 'What your Sunday night dread is trying to tell you.',
-    color: '#0E2A3A',
-    legacy: 'Future',
-    aliases: ['future', 'work', 'career', 'career & workstyle'],
+    aliases: [
+      'relationships',
+      'relationship',
+      'love',
+      'love & relationships',
+      'social',
+      'dating',
+      'friendship',
+    ],
   },
   {
     key: 'lifestyle',
     slug: 'lifestyle',
-    name: 'Lifestyle & Aesthetics',
-    blurb: 'Cottagecore, Y2K, or one clean line of minimalism.',
+    name: 'Lifestyle',
+    blurb: 'Cottagecore, Y2K, taste, daily rhythm, or one clean line of minimalism.',
     color: '#E8E0D0',
-    legacy: null,
-    aliases: ['aesthetics', 'lifestyle', 'lifestyle & aesthetics'],
+    aliases: ['lifestyle', 'aesthetics', 'aesthetic', 'lifestyle & aesthetics', 'daily life', 'home'],
   },
   {
-    key: 'trivia',
-    slug: 'trivia',
-    name: 'Trivia & Knowledge',
-    blurb: 'For the people who answer before reading the options.',
+    key: 'mindset',
+    slug: 'mindset',
+    name: 'Mindset',
+    blurb: 'Subconscious patterns, big decisions, and how you protect your energy.',
     color: '#0B0A12',
-    legacy: null,
-    aliases: ['knowledge', 'trivia', 'trivia & knowledge'],
+    aliases: ['mindset', 'subconscious', 'mental', 'emotions', 'decision making', 'energy'],
   },
 ]
+
+/** 6 个展示名，按展示顺序（前台页签 / 后台分类按钮共用这一串）。 */
+export const QUIZ_CATEGORY_ORDER: string[] = QUIZ_TOPICS.map((topic) => topic.name)
+
 
 export type QuizTagKind = 'signal' | 'format' | 'aesthetic'
 
@@ -174,13 +212,12 @@ const normKey = (value: unknown): string =>
     .replace(/[^a-z0-9&-]/g, '')
     .replace(/^-+|-+$/g, '')
 
-/** 认一个分类词（key / 旧分类值 / 别名 / 全名都行）；认不出返回 null。 */
+/** 认一个分类词（key / slug / 展示名 / 旧词别名都行）；认不出返回 null。 */
 export function resolveQuizTopic(value: unknown): QuizTopicDef | null {
   const key = normKey(value)
   if (!key) return null
   for (const topic of QUIZ_TOPICS) {
     if (topic.key === key || topic.slug === key) return topic
-    if (topic.legacy && normKey(topic.legacy) === key) return topic
     if (topic.name && normKey(topic.name) === key) return topic
     if (topic.aliases.some((alias) => normKey(alias) === key)) return topic
   }
@@ -199,16 +236,15 @@ export function resolveQuizTag(value: unknown): QuizTagDef | null {
 }
 
 /**
- * 话题 → 写进 `quizzes.categories` 的旧词汇。
+ * 话题 → 写进 `quizzes.categories` 的值。
  *
- * 为什么不是直接写 6 个新话题名：前台按 `categories[0]` 挑结果页配色
- * （ComeBrief `lib/result-theme.ts` 只认识 Persona / Sports / Social / Future），
- * 换词汇会让存量卷的配色、列表页签、相关测验一起错位。
- * 这一版**只写旧词**；等前台接上 topic_id 再切（见 50_quiz_taxonomy.sql 的说明）。
+ * 统一词表之后只有一套词：`quiz_topics.name`（`name` 同时是 SQL 里
+ * `legacy_name` 的镜像值），所以前台按 `categories[0]` 挑配色 / 聚合话题页，
+ * 读到的就是后台分类屏上看到的同一个词。
  */
 export function topicToCategories(topic: QuizTopicDef | null): string[] {
   if (!topic) return []
-  return [topic.legacy || topic.name]
+  return [topic.name]
 }
 
 /* ------------------------------------------------------------------ *

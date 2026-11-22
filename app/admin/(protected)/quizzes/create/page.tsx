@@ -14,6 +14,7 @@ import QuizBatchImport from "@/app/admin/_components/QuizBatchImport";
 import QuizAiWizard, { type QuizAiApplyPayload } from "@/app/admin/_components/QuizAiWizard";
 import QuizAxesEditor, { blankAxeQuiz } from "@/app/admin/_components/QuizAxesEditor";
 import { auditAxeQuiz, normalizeAxeQuiz, type AxeQuiz } from "@/lib/quizAxes";
+import { DEFAULT_CATEGORY, QUIZ_CATEGORIES } from "@/lib/quizPack";
 // --- 🚀 AURA 核心：WebP 转码转码引擎 ---
 const compressAndConvertToWebP = (file: File): Promise<File> => {
   return new Promise((resolve, reject) => {
@@ -66,8 +67,9 @@ function QuizEditorContent() {
   const [aiHook, setAiHook] = useState(""); 
   const [toast, setToast] = useState<{ msg: string, type: 'success' | 'error' } | null>(null);
 
-  // 分类管理状态 (之前丢失的部分)
-  const [categoriesList, setCategoriesList] = useState(["Persona", "Subconscious", "Social", "Future"]);
+  // 分类按钮：候选值只有一份真源（lib/quizPack → lib/quizKit 的 6 个话题）。
+  // 历史数据里不在表内的值会在加载时补到列表末尾，仍然可见、可点掉。
+  const [categoriesList, setCategoriesList] = useState<string[]>([...QUIZ_CATEGORIES]);
   const [isEditingCategories, setIsEditingCategories] = useState(false);
   const [newCategory, setNewCategory] = useState("");
 
@@ -89,7 +91,7 @@ function QuizEditorContent() {
   const [quizData, setQuizData] = useState({
     title: "",
     model: "score",
-    categories: ["Persona"], 
+    categories: [DEFAULT_CATEGORY],
     cover_url: "",
     is_limited: false,
     tags: [] as string[],
@@ -132,23 +134,31 @@ useEffect(() => {
           const axe = normalizeAxeQuiz(data.raw_data);
           if (axe) {
             setAxeQuiz(axe.quiz);
+            const loadedCategories: string[] = Array.isArray(data.raw_data?.categories)
+              ? data.raw_data.categories
+              : Array.isArray(data?.categories)
+                ? data.categories
+                : [];
+            // 统一词表优先；旧数据里不在表内的词补在后面（仍然可见、可点掉），
+            // 否则「已选分类」会指向一个不存在的按钮，看起来像没分类。
+            setCategoriesList(
+              Array.from(new Set<string>([...QUIZ_CATEGORIES, ...loadedCategories]))
+            );
             setQuizData((prev) => ({
               ...prev,
               title: data.raw_data?.title ?? data?.title ?? prev.title,
               model: 'axes',
-              categories: Array.isArray(data.raw_data?.categories)
-                ? data.raw_data.categories
-                : Array.isArray(data?.categories)
-                  ? data.categories
-                  : prev.categories,
+              categories: loadedCategories.length ? loadedCategories : prev.categories,
               tags: Array.isArray(data.raw_data?.tags) ? data.raw_data.tags : prev.tags,
               cover_url: data.raw_data?.cover_url ?? data?.cover_url ?? prev.cover_url,
               is_limited: Boolean(data.raw_data?.is_limited),
               questions: [],
               results: [],
             }));
+            // 只有「真的改了数据」才提示。缺象限这类降级走 advisories，不再冒充纠错
+            // （见 lib/quizAxes 的 AxeNormalizeResult）。
             if (axe.issues.length) {
-              showToast(`原型卷有 ${axe.issues.length} 处结构问题已自动纠正：${axe.issues[0]}`, "error");
+              showToast(`已自动纠正 ${axe.issues.length} 处：${axe.issues[0]}`, "success");
             }
           } else {
             setQuizData(data.raw_data);
