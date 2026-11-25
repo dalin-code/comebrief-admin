@@ -28,6 +28,9 @@ import {
 } from './quizAxes'
 // 分类屏 / 页签的展示顺序与 `quiz_topics` 同源（lib/quizKit 的 QUIZ_TOPICS）。
 import { QUIZ_CATEGORY_ORDER } from './quizKit'
+// 环境变量可能是 `[https://…] (https://…)` 这种被 Markdown 包住的脏值：
+// 直接拼 `/quizzes/...` 会得到打不开的「前台」地址。
+import { normalizeSiteUrl } from './siteUrl'
 
 /** 一条 quizzes 行。字段都按「可能缺列」处理：阶段 0 的 SQL 不一定跑过。 */
 export type QuizRow = {
@@ -442,9 +445,9 @@ export function missingColumnFrom(message: unknown): string {
   return (m1?.[1] || m2?.[1] || '').trim()
 }
 
-/** 前台地址：优先 NEXT_PUBLIC_SITE_URL；本地默认 3000，线上默认主站。 */
+/** 前台地址：优先 NEXT_PUBLIC_SITE_URL（归一化后）；本地默认 3000，线上默认主站。 */
 export function frontBaseUrl(): string {
-  const configured = (process.env.NEXT_PUBLIC_SITE_URL || '').trim().replace(/\/+$/, '')
+  const configured = normalizeSiteUrl(process.env.NEXT_PUBLIC_SITE_URL)
   if (configured) return configured
 
   if (process.env.NODE_ENV === 'production') return 'https://comebrief.com'

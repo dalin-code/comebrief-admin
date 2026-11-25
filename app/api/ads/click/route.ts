@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server'
 import { getSupabaseAdminClient } from '@/lib/supabaseAdmin'
 import { supabase as anonClient } from '@/lib/supabase'
+import { SITE_URL } from '@/lib/siteUrl'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -21,7 +22,6 @@ export const dynamic = 'force-dynamic'
  */
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || 'https://comebrief.com').replace(/\/+$/, '')
 const FALLBACK_URL = `${SITE_URL}/`
 
 /** 只允许站内绝对路径或 http(s) 外链，别把广告接口变成任意跳转器。 */

@@ -1,4 +1,5 @@
 import { fetchWithTimeout, isAbortError } from '@/lib/aiGemini'
+import { normalizeSiteUrl } from '@/lib/siteUrl'
 
 /**
  * 敲一下前台的门，让它把那几页 ISR 缓存立刻重建。
@@ -42,10 +43,10 @@ function resolveTarget(): { url: string; secret: string; missing: string[] } {
   const secret = (process.env.REVALIDATE_SECRET || '').trim()
 
   const explicit = (process.env.FRONTEND_REVALIDATE_URL || '').trim()
-  const site = (process.env.NEXT_PUBLIC_SITE_URL || '').trim()
-  const fromSite = /^https?:\/\//i.test(site)
-    ? `${site.replace(/\/+$/, '')}/api/revalidate`
-    : ''
+  // 环境变量可能是 `[https://…] (https://…)` 这种被 Markdown 包住的脏值：
+  // 旧的 `/^https?:\/\//` 判定会把它当成「没配」，于是刷新被静默跳过。
+  const site = normalizeSiteUrl(process.env.NEXT_PUBLIC_SITE_URL)
+  const fromSite = site ? `${site}/api/revalidate` : ''
 
   const url = explicit || fromSite
   const missing: string[] = []

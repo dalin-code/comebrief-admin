@@ -88,3 +88,9 @@ jobs:
       # /api/ai/story/finalize 共用 lib/textQuality.ts，改规则会在这里先红。
       - name: Grammar gate checks
         run: npm run check:grammar
+
+      # 站点 origin 的归一化：环境变量被粘成 `[https://…] (https://…)` 时，
+      # IndexNow / 前台刷新 / 广告兜底跳转全会坏（2026-11-25 线上就是这么坏的）。
+      # 这个脏值不会让 typecheck 变红，只能靠断言钉住。
+      - name: Site URL normalization checks
+        run: npm run check:site-url

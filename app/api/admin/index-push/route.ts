@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server'
 import { requireAdmin } from '@/lib/aiGemini'
-import { SITE_URL, fetchSitemapUrls, pushUrls } from '@/lib/indexPush'
+import { fetchSitemapSnapshot, pushUrls } from '@/lib/indexPush'
 
 /**
  * IndexNow 回填：把**当前 sitemap 里的全部 URL** 一次性报给 Bing 系搜索引擎。
@@ -86,20 +86,22 @@ async function handle(req: NextRequest) {
   const dry = new URL(req.url).searchParams.get('dry') === '1'
 
   try {
-    const urls = await fetchSitemapUrls()
+    const { origin, urls } = await fetchSitemapSnapshot()
 
     if (dry) {
       return jsonNoStore({
         ok: true,
         dry: true,
-        site: SITE_URL,
+        site: origin,
         count: urls.length,
         sample: urls.slice(0, 10),
       })
     }
 
-    const result = await pushUrls(urls)
-    return jsonNoStore({ ok: result.ok, dry: false, site: SITE_URL, urls: urls.length, indexnow: result })
+    // 按 sitemap 自己的 origin 推（而不是环境变量里的那个）：host 与 urlList
+    // 必须属于同一域，否则 IndexNow 整批 422；sitemap 才是 canonical 的真源。
+    const result = await pushUrls(urls, origin)
+    return jsonNoStore({ ok: result.ok, dry: false, site: origin, urls: urls.length, indexnow: result })
   } catch (e: any) {
     return jsonNoStore({ ok: false, error: e?.message || 'index-push failed' }, 500)
   }

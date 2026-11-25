@@ -17,15 +17,22 @@
  * 会被自然爬到；反过来，如果推送失败把定时发布任务搞挂了，就是本末倒置。
  */
 
+import { SITE_URL, normalizeSiteUrl } from './siteUrl'
+
 /** 与 ComeBrief/public/<key>.txt 里的内容必须逐字一致。 */
 const FALLBACK_KEY = '142b2a46fe175573a7bc78efc919322b'
 
 export const INDEXNOW_KEY = (process.env.INDEXNOW_KEY || FALLBACK_KEY).trim()
 
-/** 站点主域。canonical / sitemap 的唯一真源在 ComeBrief 的 lib/site.ts，这里只跟随。 */
-export const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || 'https://comebrief.com')
-  .trim()
-  .replace(/\/+$/, '')
+/**
+ * 站点主域。canonical / sitemap 的唯一真源在 ComeBrief 的 lib/site.ts，这里只跟随。
+ *
+ * 读的是 `lib/siteUrl.ts` 归一化后的值：环境变量被粘成
+ * `[https://www.comebrief.com] (https://www.comebrief.com)` 时，直接拼
+ * `/sitemap.xml` 会抛 `Failed to parse URL`。这里同时 re-export，保持既有
+ * `import { SITE_URL } from '@/lib/indexPush'` 的调用点不动。
+ */
+export { SITE_URL }
 
 /** 共享端点：会自动把请求分发给所有参与该协议的搜索引擎。 */
 const ENDPOINT = 'https://api.indexnow.org/indexnow'
@@ -54,10 +61,14 @@ const TABLE_PREFIX: Record<string, string> = {
  *
  * 注意：IndexNow 的成功码是 **200 或 202**（202 = 已接受但仍在校验 key 文件），
  * 403 通常意味着 key 文件取不到或内容不匹配，422 意味着 URL 不属于该 host。
+ *
+ * `origin` 默认取 SITE_URL；回填时会显式传入 sitemap 里第一条 URL 的 origin ——
+ * sitemap 才是 canonical 的镜像，环境变量写的是 www 还是 apex 都不该让它 422。
  */
-export async function pushUrls(urls: string[]): Promise<PushResult> {
+export async function pushUrls(urls: string[], origin: string = SITE_URL): Promise<PushResult> {
   // 去重 + 只保留同域 URL（约束 2：混入别的 host 会让整批被拒）
-  const host = new URL(SITE_URL).host
+  const site = normalizeSiteUrl(origin) || SITE_URL
+  const host = new URL(site).host
   const unique = Array.from(new Set(urls.filter(Boolean))).filter((url) => {
     try {
       return new URL(url).host === host
@@ -84,7 +95,7 @@ export async function pushUrls(urls: string[]): Promise<PushResult> {
         body: JSON.stringify({
           host,
           key: INDEXNOW_KEY,
-          keyLocation: `${SITE_URL}/${INDEXNOW_KEY}.txt`,
+          keyLocation: `${site}/${INDEXNOW_KEY}.txt`,
           urlList,
         }),
       })
@@ -133,10 +144,37 @@ export async function pushPublishedRows(
   return pushUrls(urls)
 }
 
-/** 从站点 sitemap 读出全部 URL（回填用）。sitemap 本身就是 canonical 的镜像。 */
-export async function fetchSitemapUrls(): Promise<string[]> {
+/** sitemap 快照：URL 列表 + 它们真正所属的 origin（canonical 的真源）。 */
+export type SitemapSnapshot = {
+  /** 第一条 URL 的 origin；取不到时退回 SITE_URL */
+  origin: string
+  urls: string[]
+}
+
+/**
+ * 从站点 sitemap 读出全部 URL（回填用）。sitemap 本身就是 canonical 的镜像。
+ *
+ * 为什么连 origin 一起返回：环境变量可能写成 www（而 sitemap 发的是 apex），
+ * 这时若仍按 SITE_URL 的 host 过滤，整张 sitemap 会被当成「异域 URL」全部丢光
+ * —— 按钮显示「没取到任何 URL」，看起来像 sitemap 坏了，其实是 host 对不上。
+ */
+export async function fetchSitemapSnapshot(): Promise<SitemapSnapshot> {
   const response = await fetch(`${SITE_URL}/sitemap.xml`, { cache: 'no-store' })
-  if (!response.ok) throw new Error(`sitemap ${response.status}`)
+  if (!response.ok) throw new Error(`sitemap ${response.status}（${SITE_URL}/sitemap.xml）`)
   const xml = await response.text()
-  return Array.from(xml.matchAll(/<loc>([^<]+)<\/loc>/g)).map((m) => m[1].trim())
+  const urls = Array.from(xml.matchAll(/<loc>([^<]+)<\/loc>/g)).map((m) => m[1].trim())
+
+  const sitemapOrigin = urls.map((url) => normalizeSiteUrl(url)).find(Boolean) || ''
+  if (sitemapOrigin && sitemapOrigin !== SITE_URL) {
+    console.warn(
+      `[indexnow] sitemap 的域名是 ${sitemapOrigin}，与 NEXT_PUBLIC_SITE_URL（${SITE_URL}）不一致，按 sitemap 的域名推送`
+    )
+  }
+
+  return { origin: sitemapOrigin || SITE_URL, urls }
+}
+
+/** 只要 URL 列表的旧入口（等价于 `(await fetchSitemapSnapshot()).urls`）。 */
+export async function fetchSitemapUrls(): Promise<string[]> {
+  return (await fetchSitemapSnapshot()).urls
 }
