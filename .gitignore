@@ -4,3 +4,7 @@ node_modules
 tsconfig.tsbuildinfo
 next-env.d.ts
 scripts/backups
+# macOS 目录元数据
+.DS_Store
+# 迁移 / 导出脚本的产物（整库快照、改写稿、备份），只在本机留档，不进仓库
+exports/
