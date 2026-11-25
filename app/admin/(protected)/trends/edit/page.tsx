@@ -29,6 +29,24 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  */
 const TRANSLATE_CHUNK_CHARS = 900
 
+/** Word count used by the Brief / Story format switch. */
+function countEnglishWords(html: string) {
+  const text = htmlToPlainText(html)
+  return text ? text.split(/\s+/).filter(Boolean).length : 0
+}
+
+/** PostgREST's "column does not exist" shape, used to drop optional columns. */
+function isMissingColumnError(error: unknown, column: string) {
+  const err = error as { message?: unknown; code?: unknown } | null
+  const msg = String(err?.message || '')
+  const code = String(err?.code || '')
+  return (
+    new RegExp(`Could not find the '${column}' column`, 'i').test(msg) ||
+    new RegExp(`column\\s+articles\\.${column}\\s+does\\s+not\\s+exist`, 'i').test(msg) ||
+    ((code === '42703' || code === 'PGRST204') && new RegExp(column, 'i').test(msg))
+  )
+}
+
 const INITIAL_LABELS = [
   { id: 'hot', name: 'Trending', icon: <Flame size={12} />, color: 'text-orange-500 bg-orange-50' },
   { id: 'top', name: 'Pinned', icon: <ArrowLeft className="rotate-90" size={12} />, color: 'text-blue-500 bg-blue-50' },
@@ -224,6 +242,15 @@ function EditorContentComponent() {
   const [authorPickerOpen, setAuthorPickerOpen] = useState(false);
   
   const [postStatus, setPostStatus] = useState<'draft' | 'published' | 'scheduled'>('published');
+  /**
+   * Same editor, one new control: Brief (140–400 words) vs Story.
+   * `brief` and `standalone` both live in `articles`; serials live in `stories`.
+   */
+  const [articleFormat, setArticleFormat] = useState<'brief' | 'standalone'>('brief');
+  /** Preserve any existing JSON metadata while adding the format fallback. */
+  const [articleRawData, setArticleRawData] = useState<Record<string, unknown>>({});
+  const [formatGuard, setFormatGuard] = useState<{ words: number; tooLong: boolean } | null>(null);
+  const formatOverrideRef = useRef(false);
   const [scheduledAt, setScheduledAt] = useState('');
 
   const [availableCats, setAvailableCats] = useState<string[]>([]);
@@ -498,6 +525,25 @@ function EditorContentComponent() {
             setAuthorName(data.author_name || DEFAULT_EDITOR_PERSONA.name);
             setAuthorAvatar(data.author_avatar || DEFAULT_EDITOR_PERSONA.avatar);
             if (data.status) setPostStatus(data.status);
+            // Explicit format wins; legacy long-form rows are inferred from
+            // their body length so editing an old article does not silently
+            // reclassify it as a 140–400 word Brief.
+            const loadedWords = countEnglishWords(data.content_html || data.content || '');
+            const rawFormat = (data.raw_data && typeof data.raw_data === 'object'
+              ? data.raw_data.format
+              : null) as string | null;
+            const loadedFormat =
+              data.format === 'brief' || data.format === 'standalone'
+                ? data.format
+                : rawFormat === 'brief' || rawFormat === 'standalone'
+                  ? rawFormat
+                  : loadedWords > 400
+                    ? 'standalone'
+                    : 'brief';
+            setArticleFormat(loadedFormat);
+            setArticleRawData(
+              data.raw_data && typeof data.raw_data === 'object' ? data.raw_data : {}
+            );
             if (data.scheduled_at) {
               const localDate = new Date(data.scheduled_at);
               const offset = localDate.getTimezoneOffset() * 60000;
@@ -1203,7 +1249,7 @@ function EditorContentComponent() {
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (formatOverride?: 'brief' | 'standalone') => {
     // 先把编辑器里这一边落回 ref，再决定两边各自是什么。
     // 只看 `lang` state 的话，翻译刚结束 / 页签刚切完的那一帧会写反。
     const activeNow = langRef.current;
@@ -1253,6 +1299,20 @@ function EditorContentComponent() {
       return;
     }
 
+    // 🛑 Format guard: a Brief is 140–400 words. Do not silently publish a
+    // 1,800-word piece to /briefs, and do not silently pad a 90-word stub.
+    const effectiveFormat = formatOverride || articleFormat;
+    const enWords = countEnglishWords(draft.htmlEn);
+    if (
+      (postStatus === 'published' || postStatus === 'scheduled') &&
+      effectiveFormat === 'brief' &&
+      (enWords < 140 || enWords > 400) &&
+      !formatOverrideRef.current
+    ) {
+      setFormatGuard({ words: enWords, tooLong: enWords > 400 });
+      return;
+    }
+
     setSaving(true);
     try {
       // 翻译后的自动封面可能还在画。先等它，避免封面刚回来、页面已经跳走。
@@ -1282,6 +1342,18 @@ function EditorContentComponent() {
         category: primaryCategory,
         categories: savedCategories,
         labels: selectedLabels,
+        // Two-format model: `brief` = 140–400 words, `standalone` = longer
+        // one-piece story. Both stay in `articles`; serials live in `stories`.
+        format: effectiveFormat,
+        word_count: enWords,
+        read_minutes: Math.max(1, Math.ceil(enWords / 220)),
+        // Pre-migration fallback: public code reads `raw_data.format` when the
+        // `format` column does not exist yet.
+        raw_data: {
+          ...(articleRawData || {}),
+          format: effectiveFormat,
+          word_count: enWords,
+        },
         status: postStatus,
         // ⚠️ 这里必须用「英文那一版」：中文页签下编辑器里装的是中文稿，不能存进 content_html
         content_html: draft.htmlEn,
@@ -1345,6 +1417,22 @@ function EditorContentComponent() {
         categoriesDropped = true;
         writeResult = await writeArticle(legacyPayload);
       }
+
+      // `format` / `word_count` arrive with migration 47. If the code is
+      // deployed first, drop only those optional columns and keep saving;
+      // the public site still classifies by word count.
+      let formatDropped = false;
+      if (
+        writeResult.error &&
+        (isMissingColumnError(writeResult.error, 'format') ||
+          isMissingColumnError(writeResult.error, 'word_count'))
+      ) {
+        const withoutFormat = { ...payload };
+        delete withoutFormat.format;
+        delete withoutFormat.word_count;
+        formatDropped = true;
+        writeResult = await writeArticle(withoutFormat);
+      }
       if (writeResult.error) throw writeResult.error;
 
       // 文章先落库，**再**补话题（顺序不能反：先补话题再写文章，中途失败就会
@@ -1359,6 +1447,8 @@ function EditorContentComponent() {
       if (zhChanged) setZhUpdatedAt(currentIsoTime);
       if (categoriesDropped) {
         showToast(`文章已保存；${CATEGORIES_MIGRATION_HINT} 本次只写入了主话题。`, 'info');
+      } else if (formatDropped) {
+        showToast('文章已保存；数据库还没启用 format / word_count，本次按正文词数自动归类。', 'info');
       } else if (articleId) {
         showToast('文章大动脉修改同步成功！', 'success');
       } else {
@@ -1377,11 +1467,14 @@ function EditorContentComponent() {
       }
     } finally {
       guardOverrideRef.current = false;
+      formatOverrideRef.current = false;
       setSaving(false);
     }
   };
 
   if (!isMounted) return null;
+
+  const liveWords = countEnglishWords(getEnBody());
 
   const getSubmitButtonConfig = () => {
     if (postStatus === 'draft') return { label: '保存为草稿', icon: <Save size={14} /> };
@@ -1419,7 +1512,7 @@ function EditorContentComponent() {
              <Sparkles size={14} className="text-indigo-500" /> AI 创作
            </button>
            <button 
-             onClick={handleSave}
+             onClick={() => handleSave()}
              disabled={saving}
              className={`h-12 px-10 text-white rounded-2xl font-black text-[10px] shadow-2xl bg-slate-900 flex items-center gap-3 transition-all ${saving ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105'}`}>
              {saving ? <Loader2 size={14} className="animate-spin" /> : btnConfig.icon} 
@@ -1599,6 +1692,86 @@ function EditorContentComponent() {
           <section className="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm transition-all hover:shadow-md">
             <h3 className="text-[10px] font-black tracking-[0.4em] text-slate-400 mb-6 italic flex items-center gap-2 text-left">发布策略 (Strategy) <Clock size={14}/></h3>
             <div className="flex flex-col gap-5">
+              {/* Format switch: same editor, one control. */}
+              <div className="space-y-3 rounded-3xl border border-slate-100 bg-slate-50/70 p-4 text-left">
+                <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white p-1.5">
+                  <button
+                    type="button"
+                    onClick={() => { setArticleFormat('brief'); setFormatGuard(null); }}
+                    className={`rounded-xl py-3 text-[9px] font-black tracking-wider transition-all ${
+                      articleFormat === 'brief'
+                        ? 'bg-slate-900 text-white shadow-md'
+                        : 'text-slate-400 hover:text-slate-600'
+                    }`}
+                  >
+                    BRIEF · 140–400
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setArticleFormat('standalone')}
+                    className={`rounded-xl py-3 text-[9px] font-black tracking-wider transition-all ${
+                      articleFormat === 'standalone'
+                        ? 'bg-slate-900 text-white shadow-md'
+                        : 'text-slate-400 hover:text-slate-600'
+                    }`}
+                  >
+                    STORY
+                  </button>
+                </div>
+
+                <div className="flex items-end justify-between gap-3">
+                  <div>
+                    <p className="text-[8px] font-black tracking-[0.3em] text-slate-400">WORD COUNT</p>
+                    <p className="mt-1 font-display text-3xl font-black leading-none text-slate-900">
+                      {liveWords.toLocaleString('en-US')}
+                      <span className="ml-1 text-[9px] font-black tracking-wider text-slate-400">WORDS</span>
+                    </p>
+                  </div>
+                  <span className={`rounded-full px-2.5 py-1 text-[8px] font-black tracking-wider ${
+                    articleFormat === 'standalone'
+                      ? 'bg-indigo-50 text-indigo-600'
+                      : liveWords >= 140 && liveWords <= 400
+                        ? 'bg-emerald-50 text-emerald-600'
+                        : 'bg-amber-50 text-amber-600'
+                  }`}>
+                    {articleFormat === 'standalone'
+                      ? 'READY FOR STORIES'
+                      : liveWords >= 140 && liveWords <= 400
+                        ? 'READY FOR BRIEFS'
+                        : liveWords > 400
+                          ? `${liveWords - 400} OVER`
+                          : `${140 - liveWords} SHORT`}
+                  </span>
+                </div>
+
+                <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      articleFormat === 'standalone'
+                        ? 'bg-indigo-500'
+                        : liveWords >= 140 && liveWords <= 400
+                          ? 'bg-emerald-500'
+                          : 'bg-amber-500'
+                    }`}
+                    style={{ width: `${Math.min(100, Math.max(3, (liveWords / 400) * 100))}%` }}
+                  />
+                </div>
+
+                <p className="text-[10px] font-medium leading-relaxed text-slate-500">
+                  {articleFormat === 'brief'
+                    ? 'Appears on /briefs as a short card. Publishing is blocked outside 140–400 words.'
+                    : 'Appears on /stories as a standalone. For a serial with chapters, use the Story studio.'}
+                </p>
+                {articleFormat === 'standalone' ? (
+                  <Link
+                    href="/admin/stories/create"
+                    className="inline-flex text-[9px] font-black tracking-wider text-indigo-600 hover:text-indigo-800"
+                  >
+                    OPEN STORY STUDIO →
+                  </Link>
+                ) : null}
+              </div>
+
               <div className="grid grid-cols-3 gap-2 p-1.5 bg-slate-50 rounded-2xl border border-slate-100">
                 {(['draft', 'published', 'scheduled'] as const).map((status) => (
                   <button
@@ -1949,6 +2122,64 @@ function EditorContentComponent() {
                   className="flex-1 h-12 rounded-2xl border border-slate-200 text-slate-400 font-black text-[10px] tracking-widest hover:bg-slate-50 transition-all"
                 >
                   取消
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 🛑 Format guard: Briefs are 140–400 words. Nothing is rewritten automatically. */}
+      {formatGuard && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm px-6">
+          <div className="w-full max-w-lg bg-white rounded-[40px] p-10 shadow-2xl space-y-6 text-left">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-amber-50 flex items-center justify-center shrink-0">
+                <AlertTriangle size={22} className="text-amber-500" />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-lg font-black italic tracking-tighter">
+                  {formatGuard.tooLong ? 'Too long for a Brief' : 'Too short for a Brief'}
+                </h3>
+                <p className="text-[11px] text-slate-500 font-medium leading-relaxed">
+                  This draft is <strong>{formatGuard.words.toLocaleString('en-US')} words</strong>.
+                  Briefs publish at 140–400 words. Choose a format below — your copy is not rewritten.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              {formatGuard.tooLong ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setArticleFormat('standalone');
+                    setFormatGuard(null);
+                    handleSave('standalone');
+                  }}
+                  className="h-14 rounded-2xl bg-slate-900 text-white font-black text-[11px] tracking-widest hover:scale-[1.01] active:scale-95 transition-all flex items-center justify-center gap-2"
+                >
+                  Switch to Story · keep the full draft
+                </button>
+              ) : null}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFormatGuard(null);
+                    formatOverrideRef.current = true;
+                    handleSave();
+                  }}
+                  className="flex-1 h-12 rounded-2xl border border-amber-200 text-amber-600 font-black text-[10px] tracking-widest hover:bg-amber-50 transition-all"
+                >
+                  Publish anyway
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFormatGuard(null)}
+                  className="flex-1 h-12 rounded-2xl border border-slate-200 text-slate-400 font-black text-[10px] tracking-widest hover:bg-slate-50 transition-all"
+                >
+                  Keep editing
                 </button>
               </div>
             </div>

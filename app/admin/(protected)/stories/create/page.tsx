@@ -333,6 +333,11 @@ function PublisherStudioContent() {
       <header className="h-20 bg-white border-b border-slate-200 px-8 flex items-center justify-between shrink-0 z-30">
         <div className="flex items-center gap-6">
           <button onClick={() => router.back()} className="text-slate-400 p-2 hover:bg-slate-50 rounded-xl transition-all"><ChevronLeft size={20}/></button>
+          {/* Format switch: this studio is the Story side; Briefs use the article editor. */}
+          <div className="flex bg-slate-100 p-1 rounded-2xl">
+            <button onClick={() => router.push('/admin/trends/edit')} className="px-6 py-2.5 rounded-xl text-[11px] font-black text-slate-400 hover:text-slate-600 transition-all">BRIEF · 140–400</button>
+            <button onClick={() => undefined} className="px-6 py-2.5 rounded-xl text-[11px] font-black bg-white shadow-sm text-blue-600 transition-all">STORY</button>
+          </div>
           <div className="flex bg-slate-100 p-1 rounded-2xl">
             <button onClick={() => setStoryData({...storyData, type: 'story'})} className={`px-6 py-2.5 rounded-xl text-[11px] font-black flex items-center gap-2 transition-all ${storyData.type === 'story' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400'}`}><Type size={14} /> 故事</button>
             <button onClick={() => setStoryData({...storyData, type: 'comic'})} className={`px-6 py-2.5 rounded-xl text-[11px] font-black flex items-center gap-2 transition-all ${storyData.type === 'comic' ? 'bg-white shadow-sm text-purple-600' : 'text-slate-400'}`}><LayoutPanelTop size={14} /> 漫画</button>

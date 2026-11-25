@@ -54,7 +54,23 @@ async function fetchArticleRows() {
   }
 
   if (res.error) throw res.error;
-  return (res.data || []) as any[];
+  const rows = (res.data || []) as any[];
+
+  // `format` arrives with migration 47, but the editor also writes it into
+  // raw_data before the DDL. Query the existing JSON column so the badge works
+  // either way, without risking a missing-column failure on the main select.
+  const formatRes = await supabase.from('articles').select('id, raw_data');
+  if (!formatRes.error && Array.isArray(formatRes.data)) {
+    const byId = new Map(
+      formatRes.data.map((row: any) => [
+        String(row.id),
+        row.raw_data && typeof row.raw_data === 'object' ? row.raw_data.format : null,
+      ])
+    );
+    for (const row of rows) row.format = byId.get(String(row.id)) ?? null;
+  }
+
+  return rows;
 }
 
 // --- 🚀 1.2 状态徽章 ---
@@ -305,6 +321,11 @@ export default function TrendsManagementHub() {
                         <span className={`text-[8px] font-black px-2 py-0.5 rounded ${STATUS_STYLE[r.display_status] || 'bg-slate-100 text-slate-500'}`}>
                           {STATUS_LABEL[r.display_status] || r.display_status || '未设置'}
                         </span>
+                        {r.format === 'brief' || r.format === 'standalone' ? (
+                          <span className={`text-[8px] font-black px-2 py-0.5 rounded ${r.format === 'brief' ? 'bg-sky-100 text-sky-600' : 'bg-violet-100 text-violet-600'}`}>
+                            {r.format === 'brief' ? 'BRIEF' : 'STORY'}
+                          </span>
+                        ) : null}
                         {r.display_status === 'scheduled' && r.scheduled_at && (
                           <span className="text-[8px] font-black text-indigo-500 flex items-center gap-1">
                             <Clock size={9} /> {formatDateTime(r.scheduled_at)}
