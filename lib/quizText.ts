@@ -1121,12 +1121,14 @@ export function kitToText(kit: QuizKit): string {
       if (option.intensity !== undefined) marks.push(`(i${option.intensity})`)
       if (option.bold) marks.push('(b)')
       // 顺序映射之外的原型要写回 `→ Short`，否则再 parse 一次会换成另一个原型。
+      // `primary` 为空（只写了 `weights` 的卷）时**不能**写箭头 —— 那会留下一个
+      // 空箭头 `→`；解析端要求箭头后面有字，于是一个字都读不到，标记 (i)/(b) 也全丢。
       const positional = kit.archetypes[optionIndex]?.id
       const target =
         option.primary && option.primary !== positional
           ? kit.archetypes.find((archetype) => archetype.id === option.primary)
           : null
-      const arrow = option.primary !== positional ? ` → ${target?.short || target?.name || option.primary}` : ''
+      const arrow = target ? ` → ${target.short || target.name || target.id}` : ''
       lines.push(`${String.fromCharCode(65 + optionIndex)}. ${option.text}${marks.length ? `  ${marks.join(' ')}` : ''}${arrow}`)
     })
   })
