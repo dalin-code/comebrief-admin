@@ -178,3 +178,55 @@ export async function fetchSitemapSnapshot(): Promise<SitemapSnapshot> {
 export async function fetchSitemapUrls(): Promise<string[]> {
   return (await fetchSitemapSnapshot()).urls
 }
+
+/**
+ * 把「后台传上来的一条 URL」变成绝对地址。
+ *
+ *   '/quizzes/career-test'                  → `${origin}/quizzes/career-test`
+ *   'https://comebrief.com/quizzes/x'        → 原样（只认 http/https）
+ *   'comebrief.com/x' / 'javascript:…' / ''  → ''（调用方据此报 400）
+ *
+ * 为什么不在调用方拼：路由里已经 `new URL(req.url)` 过一次，再加一层字符串
+ * 拼接，`//evil.com` 这种「看着是路径、其实是域」的输入就会被拼成
+ * `https://comebrief.com//evil.com` —— 虽然 host 还是自己，但推上去是 404。
+ * 这里显式拒绝协议相对地址（`//` 开头），把判断留在一个地方。
+ */
+export function toAbsoluteSiteUrl(raw: unknown, origin: string = SITE_URL): string {
+  const text = String(raw ?? '').trim()
+  if (!text) return ''
+  if (text.startsWith('//')) return ''
+
+  const site = normalizeSiteUrl(origin) || SITE_URL
+  if (text.startsWith('/')) {
+    try {
+      const url = new URL(text, site)
+      return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : ''
+    } catch {
+      return ''
+    }
+  }
+
+  try {
+    const url = new URL(text)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return ''
+    return url.toString()
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 该 URL 是否属于站点主域。
+ *
+ * IndexNow 的约束是「一次提交里的 URL 必须全部同一 host」，混进一条别的域名
+ * 会让**整批** 422 —— 后台的单条推送尤其容易踩到（有人从预览域名复制了链接）。
+ */
+export function isSameSiteUrl(raw: unknown, origin: string = SITE_URL): boolean {
+  const site = normalizeSiteUrl(origin) || SITE_URL
+  try {
+    const host = new URL(site).host
+    return new URL(String(raw ?? '').trim()).host === host
+  } catch {
+    return false
+  }
+}

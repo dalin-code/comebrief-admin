@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server'
 import { requireAdmin } from '@/lib/aiGemini'
-import { fetchSitemapSnapshot, pushUrls } from '@/lib/indexPush'
+import { fetchSitemapSnapshot, isSameSiteUrl, pushUrls, toAbsoluteSiteUrl, SITE_URL } from '@/lib/indexPush'
 
 /**
  * IndexNow 回填：把**当前 sitemap 里的全部 URL** 一次性报给 Bing 系搜索引擎。
@@ -20,6 +20,12 @@ import { fetchSitemapSnapshot, pushUrls } from '@/lib/indexPush'
  * 用法：
  *   curl -X POST 'https://<admin-host>/api/admin/index-push?dry=1' -H 'Authorization: Bearer $CRON_SECRET'
  *   curl -X POST 'https://<admin-host>/api/admin/index-push'       -H 'Authorization: Bearer $CRON_SECRET'
+ *
+ * 单条推送（后台「保存后推送这一页」，2026-11-25 起）：
+ *   curl -X POST 'https://<admin-host>/api/admin/index-push?url=/quizzes/career-test&dry=1' -H 'Authorization: Bearer $CRON_SECRET'
+ *   curl -X POST 'https://<admin-host>/api/admin/index-push?url=/quizzes/career-test'       -H 'Authorization: Bearer $CRON_SECRET'
+ * `url` 接受站内路径或完整 http(s) 地址；不属于站点主域的会被 400 拦下
+ * （IndexNow 混入别的 host 会让整批 422，这个错很难从「推送失败」四个字里看出来）。
  */
 
 export const runtime = 'nodejs'
@@ -78,12 +84,53 @@ async function authorize(req: NextRequest): Promise<Response | null> {
   return null
 }
 
+/**
+ * 单条推送：后台「保存后推送这一页」用的。
+ *
+ * 与整站回填分开的三条理由：
+ *   · 回填要先把 sitemap 拉一遍（一次外网请求 + 一次解析），推一页不需要；
+ *   · 单条必须先做**同域校验**：IndexNow 混入异构 host 会让整批 422，而站长
+ *     只看到「推送失败」，不会想到是自己复制了预览域名；
+ *   · `?dry=1` 也要能用 —— 排查「到底推的是哪条」时，先看一眼再真推。
+ */
+async function pushSingle(rawUrl: string, dry: boolean): Promise<Response> {
+  const absolute = toAbsoluteSiteUrl(rawUrl, SITE_URL)
+  if (!absolute) {
+    return jsonNoStore(
+      { ok: false, error: 'url 不合法：传站内路径（/quizzes/xxx）或完整 http(s) 地址' },
+      400
+    )
+  }
+  if (!isSameSiteUrl(absolute, SITE_URL)) {
+    return jsonNoStore(
+      {
+        ok: false,
+        error: `这个地址不属于 ${SITE_URL}（IndexNow 混入别的域名会让整批 422，已拦下）`,
+        url: absolute,
+      },
+      400
+    )
+  }
+
+  if (dry) {
+    return jsonNoStore({ ok: true, dry: true, site: SITE_URL, count: 1, sample: [absolute] })
+  }
+
+  const result = await pushUrls([absolute], SITE_URL)
+  return jsonNoStore({ ok: result.ok, dry: false, site: SITE_URL, urls: 1, url: absolute, indexnow: result })
+}
+
 async function handle(req: NextRequest) {
   // authorize 现在是 async：admin 通道要打一次 Supabase getUser
   const denied = await authorize(req)
   if (denied) return denied
 
-  const dry = new URL(req.url).searchParams.get('dry') === '1'
+  const params = new URL(req.url).searchParams
+  const dry = params.get('dry') === '1'
+  const single = (params.get('url') || '').trim()
+
+  // 给了 url 就只推这一条（后台「保存后推送」走这里），不再拉 sitemap。
+  if (single) return pushSingle(single, dry)
 
   try {
     const { origin, urls } = await fetchSitemapSnapshot()
