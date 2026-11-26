@@ -24,8 +24,23 @@ import { normalizeSiteUrl } from '@/lib/siteUrl'
  */
 const TIMEOUT_MS = 5000
 
-/** 刷新目标只认这三页（与前台 app/api/revalidate/route.ts 里的白名单一致）。 */
-export const FRONTEND_PATHS = ['/', '/briefs', '/briefs/[slug]'] as const
+/**
+ * 刷新目标（**仅作文档用**：真正的白名单在前台 `app/api/revalidate/route.ts` 的
+ * `TARGETS`，请求体里不带路径）。
+ *
+ * growth 接入后前台的白名单扩到了「首页 + 三个 hub + 话题页 + 三类详情页」，
+ * 这里跟着改是为了下次有人查「到底会刷哪几页」时不会读到一份过期清单。
+ */
+export const FRONTEND_PATHS = [
+  '/',
+  '/briefs',
+  '/briefs/[slug]',
+  '/quizzes',
+  '/quizzes/[slug]',
+  '/quizzes/topic/[slug]',
+  '/stories',
+  '/stories/[slug]',
+] as const
 
 export type RevalidateOutcome = {
   ok: boolean
