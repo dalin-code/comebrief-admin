@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { Download, Save } from 'lucide-react'
+import { Download, Globe2, Save, Settings2 } from 'lucide-react'
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 
 type Notice = { type: 'success' | 'error' | 'info'; message: string } | null
@@ -121,6 +122,39 @@ export default function GrowthPage() {
         </div>
 
         {notice ? <div className={`mb-6 rounded-xl border px-4 py-3 text-sm ${tone}`}>{notice.message}</div> : null}
+
+        <div className="mb-6 grid gap-4 sm:grid-cols-2">
+          <Link
+            href="/admin/growth/topics"
+            className="group rounded-2xl border border-slate-200 bg-white p-6 transition hover:border-slate-300 hover:shadow-sm"
+          >
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
+              <Globe2 className="h-4 w-4 text-emerald-600" />
+              页面级 SEO / GEO
+            </div>
+            <p className="mt-2 text-sm leading-relaxed text-slate-500">
+              聚合页与分类页的标题、描述、导语、TL;DR、问答、OG 图；AI 出草案，保存即刷新前台缓存。
+            </p>
+            <span className="mt-3 inline-block text-[11px] font-semibold text-emerald-600 group-hover:underline">
+              打开控制台 →
+            </span>
+          </Link>
+          <Link
+            href="/admin/growth/defaults"
+            className="group rounded-2xl border border-slate-200 bg-white p-6 transition hover:border-slate-300 hover:shadow-sm"
+          >
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
+              <Settings2 className="h-4 w-4 text-slate-500" />
+              全局默认
+            </div>
+            <p className="mt-2 text-sm leading-relaxed text-slate-500">
+              品牌后缀、UTM 默认值、六条社媒文案模板，以及「保存后自动推送」开关。
+            </p>
+            <span className="mt-3 inline-block text-[11px] font-semibold text-slate-600 group-hover:underline">
+              编辑默认值 →
+            </span>
+          </Link>
+        </div>
 
         <div className="grid gap-6 lg:grid-cols-2">
           <section className="rounded-2xl border border-slate-200 bg-white p-6">

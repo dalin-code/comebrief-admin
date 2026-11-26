@@ -94,3 +94,10 @@ jobs:
       # 这个脏值不会让 typecheck 变红，只能靠断言钉住。
       - name: Site URL normalization checks
         run: npm run check:site-url
+
+      # 增长中台的纯逻辑：slug / 路径归一（与前台 lib/slug.ts 同源）、UTM 拼接、
+      # 问答与实体归一、长度闸、就绪度、{url} 占位符不被切断、单条推送的同域判定，
+      # 以及与 supabase/52_growth_seo_geo.sql 的默认模板对拍。
+      # 这些错误全是 string 与 number，typecheck 一条都看不见。
+      - name: Growth checks
+        run: npm run check:growth

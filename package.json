@@ -16,7 +16,8 @@
     "check:text": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/_ts-resolve.mts scripts/check-quiz-text.mts",
     "check:trends": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/_ts-resolve.mts scripts/check-trends.mts",
     "check:site-url": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/_ts-resolve.mts scripts/check-site-url.mts",
-    "check:grammar": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/_ts-resolve.mts scripts/check-grammar.mts"
+    "check:grammar": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/_ts-resolve.mts scripts/check-grammar.mts",
+    "check:growth": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/_ts-resolve.mts scripts/check-growth.mts"
   },
   "dependencies": {
     "@floating-ui/dom": "^1.8.0",

@@ -14,6 +14,14 @@ import QuizBatchImport from "@/app/admin/_components/QuizBatchImport";
 import QuizAiWizard, { type QuizAiApplyPayload } from "@/app/admin/_components/QuizAiWizard";
 import QuizAxesEditor, { blankAxeQuiz } from "@/app/admin/_components/QuizAxesEditor";
 import { auditAxeQuiz, normalizeAxeQuiz, type AxeQuiz } from "@/lib/quizAxes";
+import { contentPathFor } from "@/lib/growth";
+import GrowthPanel, {
+  EMPTY_GROWTH_DRAFT,
+  draftFromRow,
+  draftToContentFields,
+  type GrowthDraft,
+} from "@/app/admin/_components/growth/GrowthPanel";
+import { notifyRevalidate } from "@/app/admin/_components/growth/actions";
 import { DEFAULT_CATEGORY, QUIZ_CATEGORIES } from "@/lib/quizPack";
 // --- 🚀 AURA 核心：WebP 转码转码引擎 ---
 const compressAndConvertToWebP = (file: File): Promise<File> => {
@@ -107,6 +115,13 @@ function QuizEditorContent() {
   // 保存时按 `quizData.model` 二选一写进 `raw_data`。
   const [axeQuiz, setAxeQuiz] = useState<AxeQuiz>(blankAxeQuiz);
 
+  // SEO / GEO 物料（SQL 52 加在 quizzes 上的七列）。和正文分开一份状态：
+  // 这些字段只出现在 SEO 标签页，混进 `quizData` 会让每个 tab 都多一层判空。
+  // 落库仍由 handlePublish 一起写进 payload —— 少一次「保存了两半」的机会。
+  const [growthDraft, setGrowthDraft] = useState<GrowthDraft>(EMPTY_GROWTH_DRAFT);
+  /** 前台地址（AI 起草要它来拼社媒链接）；新建时为空，保存前不推前台。 */
+  const [growthUrl, setGrowthUrl] = useState('');
+
 
   const showToast = (msg: string, type: 'success' | 'error') => {
     setToast({ msg, type });
@@ -173,6 +188,9 @@ useEffect(() => {
         }
         setIsFeatured(Boolean(data?.is_featured));
         if (data?.featured_order != null) setFeaturedOrder(Number(data.featured_order) || 0);
+        // SEO / GEO 物料：缺列（SQL 52 还没跑）时读不到这些键，draftFromRow 会把它们当空 —— 面板照样能用
+        setGrowthDraft(draftFromRow(data));
+        setGrowthUrl(contentPathFor('quizzes', data?.slug || data?.id || ''));
       } catch (err) {
         console.error("Fetch quiz error:", err);
         showToast("Failed to load quiz data. Please check your connection.", "error");
@@ -321,7 +339,9 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         // `50_quiz_taxonomy.sql` 里 scoring_mode 允许 axes；列还没跑时下面那段
         // 「缺列就剔除重试」会把它摘掉，不影响保存。
         ...(quizData.model === 'axes' ? { scoring_mode: 'axes' } : {}),
-        raw_data: rawData
+        raw_data: rawData,
+        // SQL 52 的七列。列不存在时下面「缺列就剔除重试」会逐个摘掉，不会让整次保存失败。
+        ...draftToContentFields(growthDraft),
       };
       if (isLive) payload.published_at = new Date().toISOString();
 
@@ -330,7 +350,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       let current: any = { ...payload };
       let saved = false;
       let lastError: any = null;
-      for (let i = 0; i < 6; i++) {
+      for (let i = 0; i < 12; i++) {
         const res = editId
           ? await supabase.from('quizzes').update(current).eq('id', editId)
           : await supabase.from('quizzes').insert([current]);
@@ -352,8 +372,13 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       }
       if (!saved) throw lastError || new Error('save failed');
 
+      // 保存成功后再刷前台缓存。刷新失败不影响保存结果 —— 前台会退回 ≤60s 的 ISR，
+      // 所以提示只说「最迟 60 秒可见」，不把刷新失败说成保存失败。
+      const revalidate = await notifyRevalidate();
       showToast(
-        postStatus === 'published' ? "已发布上线" : postStatus === 'scheduled' ? "已排入定时队列" : "草稿已保存",
+        `${postStatus === 'published' ? "已发布上线" : postStatus === 'scheduled' ? "已排入定时队列" : "草稿已保存"}${
+          revalidate.ok ? ' · 前台缓存已刷新' : ' · 前台最迟 60 秒可见'
+        }`,
         "success"
       );
       setTimeout(() => router.push('/admin/quiz-studio'), 1000);
@@ -367,9 +392,13 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
   // axes 卷的两个旧标签页换了语义：Content → 权重矩阵，Results → 原型文案。
   // 位置仍是三个（而不是给 axes 另开一套导航）：「题目 / 结果 / 打分逻辑」
   // 这件事三个模型都一样，只是画法不同。
-  const navTabs = quizData.model === 'axes'
-    ? [{ id: 'content', label: 'Matrix' }, { id: 'results', label: 'Archetypes' }, { id: 'logic', label: 'Logic' }]
-    : [{ id: 'content', label: 'Content' }, { id: 'results', label: 'Results' }, { id: 'logic', label: 'Logic' }];
+  // 第四个 SEO 标签页与模型无关（两套模型都要能被搜到），所以两边都加。
+  const navTabs = [
+    ...(quizData.model === 'axes'
+      ? [{ id: 'content', label: 'Matrix' }, { id: 'results', label: 'Archetypes' }, { id: 'logic', label: 'Logic' }]
+      : [{ id: 'content', label: 'Content' }, { id: 'results', label: 'Results' }, { id: 'logic', label: 'Logic' }]),
+    { id: 'seo', label: 'SEO' },
+  ];
 
   const modelPicker = (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-8 animate-in fade-in">
@@ -388,6 +417,17 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       ))}
     </div>
   );
+
+  // 🧠 喂给 SEO / GEO 起草器的「内容事实」。测验没有正文，就用题干拼一份大纲 ——
+  // 没有它，AI 写出来的描述与实际题目对不上（一道职场卷被写成恋爱测试）。
+  const quizOutline = quizData.questions
+    .map((q: any, i: number) => {
+      const title = String(q?.title || '').trim();
+      return title ? `${i + 1}. ${title}` : '';
+    })
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, 6000);
 
   return (
     <div className="h-screen bg-[#F8F9FB] flex flex-col overflow-hidden text-left relative font-sans">
@@ -433,7 +473,7 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
 
       <main className="flex-1 flex overflow-hidden">
         {/* 左侧题目大纲（axes 卷不适用：题目直接在矩阵里编，不需要另开大纲） */}
-        {quizData.model !== 'axes' && (
+        {quizData.model !== 'axes' && activeTab !== 'seo' && (
         <aside className="w-72 bg-white border-r border-slate-200 flex flex-col shrink-0">
           <div className="p-6 border-b border-slate-50 text-[10px] font-black text-slate-400 tracking-widest">Outline</div>
           <div className="flex-1 overflow-y-auto p-4 space-y-2 no-scrollbar">
@@ -449,8 +489,27 @@ const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         )}
 
         {/* 中间编辑主区 */}
-        <section className={quizData.model === 'axes' ? "flex-1 overflow-hidden bg-[#FBFBFC]" : "flex-1 overflow-y-auto p-12 bg-[#FBFBFC]"}>
-          {quizData.model === 'axes' ? (
+        <section className={activeTab === 'seo' || quizData.model !== 'axes' ? "flex-1 overflow-y-auto p-12 bg-[#FBFBFC]" : "flex-1 overflow-hidden bg-[#FBFBFC]"}>
+          {activeTab === 'seo' ? (
+            <div className="max-w-3xl mx-auto space-y-4 animate-in fade-in">
+              <div className="rounded-[40px] border border-slate-200 bg-white p-10 shadow-sm">
+                <GrowthPanel
+                  scope="content"
+                  value={growthDraft}
+                  onChange={setGrowthDraft}
+                  title={quizData.title}
+                  // 题干大纲：让描述 / TL;DR / 问答贴着这一卷的真实内容，而不是通用套话
+                  body={quizOutline}
+                  url={growthUrl}
+                  disabled={isSaving}
+                />
+              </div>
+              <p className="px-4 text-[11px] leading-relaxed text-slate-400">
+                这些字段与标题、正文一起在右上角的保存按钮里落库，不需要单独保存。保存后前台缓存会自动刷新。
+                {growthUrl ? '' : ' 新建的卷还没有前台地址，AI 起草时不会生成社媒链接。'}
+              </p>
+            </div>
+          ) : quizData.model === 'axes' ? (
             activeTab === 'logic' ? (
               <div className="max-w-3xl mx-auto p-12">{modelPicker}</div>
             ) : (

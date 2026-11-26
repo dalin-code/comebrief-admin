@@ -5,12 +5,20 @@ import {
   Plus, BookOpen, Image as ImageIcon, Lock, Save, ChevronLeft, 
   Coins, Trash2, X, CheckCircle2, Menu, UploadCloud, 
   Type, LayoutPanelTop, Eye, Unlock, Loader2, AlertCircle,
-  Star, Clock
+  Star, Clock, Sparkles, ChevronDown
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from '@/lib/supabase';
 import StoryTextImport from '@/app/admin/_components/StoryTextImport';
 import type { ChapterDraft } from '@/lib/storyImport';
+import { contentPathFor } from '@/lib/growth';
+import GrowthPanel, {
+  EMPTY_GROWTH_DRAFT,
+  draftFromRow,
+  draftToContentFields,
+  type GrowthDraft,
+} from '@/app/admin/_components/growth/GrowthPanel';
+import { notifyRevalidate } from '@/app/admin/_components/growth/actions';
 
 function PublisherStudioContent() {
   const router = useRouter();
@@ -34,6 +42,13 @@ function PublisherStudioContent() {
   const [scheduledAt, setScheduledAt] = useState("");
   const [isFeatured, setIsFeatured] = useState(false);
   const [featuredOrder, setFeaturedOrder] = useState(0);
+
+  // SEO / GEO 物料（SQL 52 加在 stories 上的七列）。单独一份状态、默认收起：
+  // 日常写作时它挡在正文上面很碍事，但保存时和正文一起落库（不留半截）。
+  const [growthDraft, setGrowthDraft] = useState<GrowthDraft>(EMPTY_GROWTH_DRAFT);
+  const [growthOpen, setGrowthOpen] = useState(false);
+  /** 前台地址（AI 起草拼社媒链接用）；新建时为空。 */
+  const [growthUrl, setGrowthUrl] = useState('');
 
   // --- 核心数据结构 ---
   const [storyData, setStoryData] = useState<any>({
@@ -74,6 +89,11 @@ function PublisherStudioContent() {
         }
         setIsFeatured(Boolean(data?.is_featured));
         if (data?.featured_order != null) setFeaturedOrder(Number(data.featured_order) || 0);
+        // SEO / GEO 物料：SQL 52 之前这些键不存在，draftFromRow 一律当空处理
+        setGrowthDraft(draftFromRow(data));
+        setGrowthUrl(contentPathFor('stories', data?.slug || data?.id || ''));
+        // 已经填过物料的旧作品直接展开，省一次点击
+        setGrowthOpen(Boolean(data?.seo_title || data?.seo_description || data?.ai_tldr_summary));
       };
       fetchWork();
     }
@@ -135,7 +155,7 @@ function PublisherStudioContent() {
     let current: any = { ...payload };
     let lastError: any = null;
 
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 12; i++) {
       const res = editId
         ? await supabase.from('stories').update(current).eq('id', editId)
         : await supabase.from('stories').insert([current]).select('id');
@@ -254,7 +274,9 @@ function PublisherStudioContent() {
         is_featured: isFeatured,
         featured_order: isFeatured ? Number(featuredOrder) || 0 : 0,
         content: storyData.chapters[0]?.content_text || "",
-        raw_data: storyData
+        raw_data: storyData,
+        // SQL 52 的七列；列不存在时 writeStoryRow 会逐个摘掉重试
+        ...draftToContentFields(growthDraft),
       };
       if (isLive) payload.published_at = new Date().toISOString();
 
@@ -263,8 +285,9 @@ function PublisherStudioContent() {
       const saved = await writeStoryRow(payload);
       if (!saved.ok) throw saved.error || new Error('save failed');
 
+      const revalidate = await notifyRevalidate();
       showToast(
-        postStatus === 'published' ? "连载已发布上线" : postStatus === 'scheduled' ? "已排入定时队列" : "草稿已保存",
+        `${postStatus === 'published' ? "连载已发布上线" : postStatus === 'scheduled' ? "已排入定时队列" : "草稿已保存"}${revalidate.ok ? ' · 前台缓存已刷新' : ' · 前台最迟 60 秒可见'}`,
         "success"
       );
       setTimeout(() => router.push('/admin/stories'), 1000);
@@ -435,6 +458,39 @@ function PublisherStudioContent() {
                  </div>
               </div>
               
+              <div className="bg-white rounded-[32px] border border-slate-200 shadow-sm overflow-hidden">
+                 <button
+                    type="button"
+                    onClick={() => setGrowthOpen(v => !v)}
+                    className="w-full flex items-center justify-between px-8 py-6 hover:bg-slate-50/60 transition-colors"
+                 >
+                    <span className="text-[10px] font-black tracking-[0.4em] text-slate-400 italic flex items-center gap-2">
+                       <Sparkles size={14}/> SEO / GEO 物料
+                    </span>
+                    <span className="flex items-center gap-2 text-[9px] font-black text-slate-400">
+                       {growthDraft.seo_title ? `已填标题 · ${growthDraft.seo_title.length} 字` : '未配置'}
+                       <ChevronDown size={14} className={`transition-transform ${growthOpen ? 'rotate-180' : ''}`} />
+                    </span>
+                 </button>
+                 {growthOpen && (
+                    <div className="border-t border-slate-100 px-8 py-8">
+                       <GrowthPanel
+                          scope="content"
+                          value={growthDraft}
+                          onChange={setGrowthDraft}
+                          title={storyData.title}
+                          // 当前章节正文喂给 AI；服务端再截到 6000 字符。
+                          body={(activeChapter?.content_text || '').slice(0, 6000)}
+                          url={growthUrl}
+                          disabled={isSaving}
+                       />
+                       <p className="mt-4 text-[9px] leading-relaxed text-slate-400 font-bold">
+                          这些字段跟着右上角的保存按钮一起落库，不需要单独保存；保存后前台缓存会自动刷新。
+                       </p>
+                    </div>
+                 )}
+              </div>
+
               <div className="bg-white rounded-[32px] p-8 border border-slate-200 shadow-sm flex flex-col space-y-4">
                  <label className="text-[10px] font-black text-slate-400 tracking-widest text-left">本章标题</label>
                  <input 

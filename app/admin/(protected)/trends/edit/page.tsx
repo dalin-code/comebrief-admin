@@ -18,6 +18,13 @@ import AiHealthCard from '@/app/admin/_components/AiHealthCard'
 import { buildArticleSlug, countChineseChars, htmlToPlainText, isMostlyChinese, isUsableSlug, pickChineseOriginal, resolveBilingualDraft, splitTranslationChunks } from '@/lib/storyPrompt'
 import { DEFAULT_EDITOR_PERSONA, EDITOR_PERSONAS, randomEditorPersona, type EditorPersona } from '@/lib/editors'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { contentPathFor, missingGrowthColumnFromError } from '@/lib/growth'
+import GrowthPanel, {
+  EMPTY_GROWTH_DRAFT,
+  draftFromRow,
+  draftToContentFields,
+  type GrowthDraft,
+} from '@/app/admin/_components/growth/GrowthPanel'
 
 /**
  * 一次翻译多少汉字。
@@ -220,7 +227,13 @@ function EditorContentComponent() {
   const [extractingExcerpt, setExtractingExcerpt] = useState(false);
   const [generatingCover, setGeneratingCover] = useState(false);
   const [zhReady, setZhReady] = useState(false);
-  const [slug, setSlug] = useState('');
+  const [slug, setSlug] = useState('')
+  // SEO / GEO 物料（SQL 52 加在 articles 上的七列）。与正文分开一份状态，
+  // 但跟着同一个保存按钮一起落库 —— 不让站长遇到「正文存了、物料没存」。
+  const [growthDraft, setGrowthDraft] = useState<GrowthDraft>(EMPTY_GROWTH_DRAFT)
+  const [growthOpen, setGrowthOpen] = useState(false)
+  /** 前台地址（AI 起草拼社媒链接用）。 */
+  const [growthUrl, setGrowthUrl] = useState('');
   const [composerOpen, setComposerOpen] = useState(false);
   const [storyCombo, setStoryCombo] = useState<any>({ length: 1500 });
   const [publishGuard, setPublishGuard] = useState(false);
@@ -509,6 +522,10 @@ function EditorContentComponent() {
             setTranslatedAt(data.translated_at || null);
             setZhUpdatedAt(data.zh_updated_at || null);
             setSlug(data.slug || '');
+            // SEO / GEO 物料：SQL 52 之前读不到这些键，draftFromRow 一律当空
+            setGrowthDraft(draftFromRow(data));
+            setGrowthUrl(contentPathFor('articles', data.slug || data.id || ''));
+            setGrowthOpen(Boolean(data.seo_title || data.seo_description || data.ai_tldr_summary));
             setStoryCombo(data.story_combo && typeof data.story_combo === 'object' ? data.story_combo : { length: 1500 });
             zhHtmlRef.current = draft.htmlZh;
             enHtmlRef.current = draft.htmlEn;
@@ -1362,6 +1379,9 @@ function EditorContentComponent() {
         // 这次保存已经让内容重新处于已知状态 —— 之前定时失败留下的原因必须清掉，
         // 否则库里会一直挂着一条早就解决的 publish_error。
         publish_error: null,
+        // SQL 52 的七列（SEO 标题 / 描述 / 实体 / TL;DR / 问答 / 社媒 / noindex）。
+        // 哪一列还不存在时，下面的重试会把那一列摘掉再写一次。
+        ...draftToContentFields(growthDraft),
       };
 
       // 🌐 中文原稿一并保存（前台永远读 title / excerpt / content_html 这三列英文）
@@ -1433,6 +1453,17 @@ function EditorContentComponent() {
         formatDropped = true;
         writeResult = await writeArticle(withoutFormat);
       }
+      // SQL 52 的七列同理：代码先上线、SQL 还没跑时逐列摘掉重试，
+      // 别让「多了几个 SEO 字段」把整篇文章的保存卡死。
+      let growthDropped = false;
+      for (let i = 0; i < 7 && writeResult.error; i += 1) {
+        const column = missingGrowthColumnFromError(writeResult.error);
+        if (!column || !Object.prototype.hasOwnProperty.call(payload, column)) break;
+        const next = { ...payload };
+        delete next[column];
+        growthDropped = true;
+        writeResult = await writeArticle(next);
+      }
       if (writeResult.error) throw writeResult.error;
 
       // 文章先落库，**再**补话题（顺序不能反：先补话题再写文章，中途失败就会
@@ -1449,6 +1480,8 @@ function EditorContentComponent() {
         showToast(`文章已保存；${CATEGORIES_MIGRATION_HINT} 本次只写入了主话题。`, 'info');
       } else if (formatDropped) {
         showToast('文章已保存；数据库还没启用 format / word_count，本次按正文词数自动归类。', 'info');
+      } else if (growthDropped) {
+        showToast('文章已保存；数据库还没跑 52 号迁移，本次没写入 SEO / GEO 字段。', 'info');
       } else if (articleId) {
         showToast('文章大动脉修改同步成功！', 'success');
       } else {
@@ -1688,6 +1721,45 @@ function EditorContentComponent() {
         <aside className="lg:col-span-4 space-y-8">
           {/* 🩺 AI 自检：平时收起成一行；AI 报错时点开就能看见「谁挂了、哪把 Key 缺了」 */}
           <AiHealthCard />
+
+          {/* 🔎 SEO / GEO 物料：默认收起，日常写作时不占视线 */}
+          <section className="bg-white rounded-[40px] border border-slate-100 shadow-sm overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setGrowthOpen((v) => !v)}
+              className="w-full flex items-center justify-between px-8 py-6 hover:bg-slate-50/60 transition-colors"
+            >
+              <span className="text-[10px] font-black tracking-[0.4em] text-slate-400 italic flex items-center gap-2 text-left">
+                <Sparkles size={14} /> SEO / GEO
+              </span>
+              <span className="text-[9px] font-black text-slate-400">
+                {growthDraft.seo_title
+                  ? `标题 ${growthDraft.seo_title.length} 字`
+                  : growthDraft.seo_description
+                    ? '已填描述'
+                    : '未配置'}
+              </span>
+            </button>
+            {growthOpen && (
+              <div className="border-t border-slate-100 px-8 py-8">
+                <GrowthPanel
+                  scope="content"
+                  value={growthDraft}
+                  onChange={setGrowthDraft}
+                  title={title}
+                  // 正文（英文版）喂给 AI：描述 / TL;DR / 问答才有事实可依。
+                  // 服务端还会再截到 6000 字符，这里先截一次省流量。
+                  body={htmlToPlainText(getEnBody()).slice(0, 6000)}
+                  url={growthUrl}
+                  disabled={saving}
+                />
+                <p className="mt-4 text-[9px] leading-relaxed text-slate-400 font-medium text-left">
+                  这些字段跟着顶部的保存按钮一起落库，不需要单独保存。
+                </p>
+              </div>
+            )}
+          </section>
+
           {/* 发布策略中心 */}
           <section className="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm transition-all hover:shadow-md">
             <h3 className="text-[10px] font-black tracking-[0.4em] text-slate-400 mb-6 italic flex items-center gap-2 text-left">发布策略 (Strategy) <Clock size={14}/></h3>
