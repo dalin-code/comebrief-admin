@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="ComeBrief Studio">
+  <title>ComeBrief Studio</title>
+  <circle cx="60" cy="30" r="9" fill="#FF6B3D"/>
+  <rect x="57" y="16" width="6" height="8" rx="2" fill="#FF6B3D"/>
+  <path d="M36 34H84Q100 34 100 50V54A7 7 0 0 0 100 68V72Q100 88 84 88H36Q20 88 20 72V68A7 7 0 0 0 20 54V50Q20 34 36 34Z" fill="#12111A"/>
+  <path d="M71 49A16 16 0 1 0 71 73" stroke="#F4ECDD" stroke-width="9" stroke-linecap="round" fill="none"/>
+  <circle cx="79" cy="61" r="5.5" fill="#FF6B3D"/>
+</svg>
